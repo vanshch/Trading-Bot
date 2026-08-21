@@ -1,0 +1,129 @@
+channels:
+- name: Sample Trader 1
+  url: https://www.youtube.com/@SampleTrader1/live
+  enabled: false
+  mode: full_analysis
+  trigger_keywords: []
+- name: Sample Trader 2
+  url: https://www.youtube.com/@SampleTrader2/live
+  enabled: false
+  mode: full_analysis
+  trigger_keywords: []
+- name: Mehak Trades
+  url: https://www.youtube.com/@tradewithmehaktrades/live
+  enabled: true
+  mode: full_analysis
+  trigger_keywords:
+  - trade active
+  - entry banti thi
+  - entry banayi
+  - entry le li
+  - enter kiya
+  - trade banao
+  - manual enter karo
+  - selling ki trade
+  - selling trade
+  - trade running
+  - short entry
+  - sell side ki trade
+  - buy karenge
+  - buy kiya
+  - long kiya
+  - long active
+  - short active
+  - limit order active
+  trader_profile: Mehak Trades is an SMC and price action Forex and Gold trader broadcasting live commentary in Hindi/Hinglish. She focuses on XAUUSD, Gold, Forex, Bitcoin, Order Blocks, Fair Value Gaps (FVG), liquidity sweeps, and trade setups.
+- name: Naresh Cool Trader
+  url: https://www.youtube.com/@NareshCoolTrader/live
+  enabled: true
+  mode: notifications_only
+  trigger_keywords:
+  - trade active
+  - call liya
+  - put liya
+  - ce buy kiya
+  - pe buy kiya
+  - entry le li
+  - entry banao
+  - enter kiya
+  - trade banao
+  - scalping trade
+  - buy karenge
+  - buy kiya
+  - short karenge
+  - selling trade
+  - limit order active
+  - order lag gaya
+  - sl laga lo
+  - target hit
+  - breakout ho gaya
+  - position banayi
+  trader_profile: Naresh Cool Trader is an Indian stock market index options and scalping trader broadcasting
+    live commentary in Hindi. He focuses on NIFTY, BANKNIFTY, FINNIFTY, Option Buying (CE/PE),
+    scalping setups, price action levels, support/resistance, CPR, and fast order executions.
+audio:
+  model: whisper-large-v3-turbo
+  chunk_duration_seconds: 10.0
+  context_buffer_seconds: 120
+  language: hi
+  initial_prompt: Gold, XAUUSD, BTC, Bitcoin, Forex, Order Block, FVG, Liquidity, Entry, SL, TP, Target, Buy, Sell, Long, Short, Call, Put, Breakout.
+  temperature: 0.0
+  timeout_seconds: 10.0
+  max_retries: 3
+  retry_delay_seconds: 1.0
+capture:
+  frame_interval_seconds: 5.0
+  live_poll_interval_seconds: 60.0
+  stream_timeout_seconds: 15.0
+  max_consecutive_stream_errors: 5
+cv_filter:
+  min_line_length_ratio: 0.1
+  max_line_angle_degrees: 5.0
+  roi_crop:
+    top: 0.1
+    bottom: 0.8
+    left: 0.1
+    right: 0.9
+  blue_hsv_ranges:
+  - lower:
+    - 95
+    - 80
+    - 80
+    upper:
+    - 135
+    - 255
+    - 255
+  red_hsv_ranges:
+  - lower:
+    - 0
+    - 80
+    - 80
+    upper:
+    - 10
+    - 255
+    - 255
+  - lower:
+    - 170
+    - 80
+    - 80
+    upper:
+    - 180
+    - 255
+    - 255
+  morph_kernel_width: 15
+  morph_kernel_height: 1
+  hough_threshold: 25
+  hough_min_line_length: 30
+  hough_max_line_gap: 10
+ai:
+  model_name: gemini-3.6-flash
+  confidence_threshold: 0.7
+  max_retries: 3
+  retry_delay_seconds: 2.0
+  timeout_seconds: 15.0
+telegram:
+  include_screenshot: true
+  caption_timezone: Asia/Kolkata
+  max_retries: 3
+  retry_delay_seconds: 2.0
+  timeout_seconds: 10.0

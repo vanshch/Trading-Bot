@@ -1,0 +1,10 @@
+# Runtime dependencies. Upper bounds prevent surprise major-version breakage.
+google-genai>=2.18,<3
+opencv-python-headless>=4.13,<5
+numpy>=2.0,<3
+yt-dlp>=2026.7,<2027
+streamlink>=8.5,<9
+aiohttp>=3.14,<4
+pydantic>=2.13,<3
+pyyaml>=6.0,<7
+python-dotenv>=1.2,<2

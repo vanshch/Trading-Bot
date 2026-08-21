@@ -1,0 +1,65 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+env/
+venv/
+ENV/
+
+# Environment variables & secrets
+.env
+.env.local
+.env.*.local
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs and session data
+*.log
+logs/
+data/*.json
+data/*.tmp
+!data/.gitkeep
+
+# Local recorded-video benchmarks (large/generated artifacts)
+.benchmark_artifacts/
+.stt_cache/
+.codex-*.md
+
+# Local handoff and generated deployment artifacts
+HANDOFF_CODEX.md
+deploy*.tar.gz
+GreenStay_HRM_CaseStudy_2_Vansh_Chauhan.pdf
