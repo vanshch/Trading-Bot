@@ -38,7 +38,15 @@ class AudioStreamManager:
         self._queue: asyncio.Queue[bytes | None] | None = None
 
     def _build_streamlink_command(self) -> list[str]:
-        """Build a resilient HLS transport command that writes media to stdout."""
+        """Build a resilient transport command that writes media to stdout."""
+        target = self.stream_url
+        if not (
+            "youtube.com" in target
+            or "youtu.be" in target
+            or "twitch.tv" in target
+        ) and not target.startswith("hls://"):
+            target = f"hls://{target}"
+
         return [
             sys.executable,
             "-m",
@@ -58,7 +66,7 @@ class AudioStreamManager:
             "5",
             "--stream-timeout",
             "60",
-            f"hls://{self.stream_url}",
+            target,
             "best",
         ]
 

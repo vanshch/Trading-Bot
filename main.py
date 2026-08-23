@@ -160,8 +160,14 @@ class TradeMonitoringService:
                     await asyncio.sleep(2.0)
                     continue
 
+                audio_input_url = (
+                    f"https://www.youtube.com/watch?v={stream_mgr.broadcast_id}"
+                    if stream_mgr.broadcast_id
+                    else (channel.url or direct_url)
+                )
+
                 audio_mgr = AudioStreamManager(
-                    stream_url=direct_url,
+                    stream_url=audio_input_url,
                     chunk_duration_seconds=chunk_duration,
                 )
                 self._audio_stream_managers.append(audio_mgr)

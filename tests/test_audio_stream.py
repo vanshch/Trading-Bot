@@ -31,6 +31,15 @@ class TestAudioStreamManager(unittest.IsolatedAsyncioTestCase):
         self.assertIn("hls://https://media.example/live.m3u8", command)
         self.assertEqual(command[-1], "best")
 
+    def test_streamlink_command_passes_youtube_url_directly(self) -> None:
+        manager = AudioStreamManager("https://www.youtube.com/watch?v=sample123")
+        command = manager._build_streamlink_command()
+
+        self.assertEqual(command[:3], [sys.executable, "-m", "streamlink"])
+        self.assertIn("https://www.youtube.com/watch?v=sample123", command)
+        self.assertNotIn("hls://https://www.youtube.com/watch?v=sample123", command)
+        self.assertEqual(command[-1], "best")
+
     def test_ffmpeg_reads_streamlink_output_from_stdin(self) -> None:
         manager = AudioStreamManager("https://media.example/live.m3u8")
         command = manager._build_ffmpeg_command(input_from_stdin=True)
