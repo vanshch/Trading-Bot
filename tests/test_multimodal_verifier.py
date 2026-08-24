@@ -1,4 +1,6 @@
-"""Unit tests for MultimodalTradeVerification and MultimodalVerifier."""
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from src.config import AIConfig
 from src.multimodal_verifier import (
@@ -85,3 +87,60 @@ def test_multimodal_verifier_suppresses_low_confidence_trade():
 
     assert result.is_trade_active is False
     assert result.direction == "NONE"
+
+
+@pytest.mark.asyncio
+async def test_multimodal_verifier_backoff_cap_at_30_seconds():
+    verifier = MultimodalVerifier(
+        api_key="mock-key",
+        config=AIConfig(max_retries=4, retry_delay_seconds=20.0),
+    )
+    sleep_calls = []
+
+    async def mock_sleep(duration):
+        sleep_calls.append(duration)
+
+    dummy_frame = b"\xff\xd8\xff\xe0"
+
+    with patch("asyncio.sleep", side_effect=mock_sleep), patch.object(
+        verifier, "_call_gemini_multimodal_sync", side_effect=RuntimeError("API error")
+    ), patch.object(verifier, "_get_client", return_value=MagicMock()):
+        res = await verifier.verify_multimodal_trade(
+            frame=dummy_frame,
+            transcript_context="Context",
+        )
+
+    assert res.is_trade_active is False
+    assert res.confidence == 0.0
+    assert res.direction == "NONE"
+    assert sleep_calls == [20.0, 30.0, 30.0]
+
+
+@pytest.mark.asyncio
+async def test_multimodal_verifier_model_fallback_sequence():
+    verifier = MultimodalVerifier(
+        api_key="mock-key",
+        config=AIConfig(model_name="gemini-3.6-flash", max_retries=3, retry_delay_seconds=0.01),
+    )
+    models_called = []
+
+    def mock_call(client, jpeg_bytes, prompt_text, model_name):
+        models_called.append(model_name)
+        if len(models_called) < 3:
+            raise RuntimeError("Model temporary overload")
+        return '{"is_trade_active": true, "direction": "BUY", "instrument": "GOLD", "confidence": 0.85}'
+
+    dummy_frame = b"\xff\xd8\xff\xe0"
+
+    with patch.object(verifier, "_call_gemini_multimodal_sync", side_effect=mock_call), patch.object(
+        verifier, "_get_client", return_value=MagicMock()
+    ):
+        res = await verifier.verify_multimodal_trade(
+            frame=dummy_frame,
+            transcript_context="Context",
+        )
+
+    assert res.is_trade_active is True
+    assert res.direction == "BUY"
+    assert res.confidence == 0.85
+    assert models_called == ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-3.7-flash"]

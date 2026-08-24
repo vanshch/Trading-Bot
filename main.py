@@ -1,6 +1,6 @@
 """CLI entrypoint and asynchronous orchestrator for YouTube Live Stream Trade Monitoring Bot.
 
-Features configurable real-time audio chunk transcription with Groq STT (whisper-large-v3-turbo), rolling context tracking,
+Features configurable real-time audio chunk translation with Groq STT (whisper-large-v3), rolling context tracking,
 keyword trigger gating, multimodal Gemini verification (screenshot + transcript), and fast Telegram alerts.
 """
 

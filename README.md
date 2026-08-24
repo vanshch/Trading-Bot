@@ -1,6 +1,6 @@
 # YouTube Live Stream Trade Monitoring Bot
 
-An audio-first monitoring worker that polls YouTube trading channels, transcribes live audio with Groq Speech-to-Text (`whisper-large-v3-turbo`), detects configured spoken entry phrases, verifies candidates from the transcript plus a live screenshot with Gemini, and dispatches Telegram trade alerts. The OpenCV filter is currently used by the offline video benchmark, not by the live orchestration loop.
+An audio-first monitoring worker that polls YouTube trading channels, translates live audio to English with Groq Audio Translations (`whisper-large-v3`), detects configured spoken entry phrases, verifies candidates from the transcript plus a live screenshot with Gemini, and dispatches Telegram trade alerts. The OpenCV filter is currently used by the offline video benchmark, not by the live orchestration loop.
 
 ---
 
@@ -11,7 +11,7 @@ An audio-first monitoring worker that polls YouTube trading channels, transcribe
         ├──► [AudioStreamManager + FFmpeg]
         │              │
         │              ▼
-        │     [Groq STT (whisper-large-v3-turbo)]
+        │     [Groq Translations (whisper-large-v3)]
         │              │
         │              ▼
         │     [Spoken Trigger Detector]
@@ -73,8 +73,8 @@ Edit `config.yaml` to specify target YouTube channels and their assigned monitor
 
 #### Supported Channel Modes
 Each channel in `channels` can be assigned one of two monitoring modes via the `mode` field (defaults to `full_analysis` if omitted for backward compatibility):
-- **`full_analysis`**: Full end-to-end pipeline. Receives stream live-status notifications and runs real-time audio extraction, Groq Whisper STT transcription, keyword trigger detection, Gemini multimodal verification, and trade signal alerts.
-- **`notifications_only`**: Live-status notifications only. Monitors channel online/offline state via `LiveChannelListener` and sends Telegram live stream announcements without spawning audio streaming, Groq transcription, Gemini verification, or trade analysis pipelines.
+- **`full_analysis`**: Full end-to-end pipeline. Receives stream live-status notifications and runs real-time audio extraction, Groq Whisper audio translation to English, keyword trigger detection, Gemini multimodal verification, and trade signal alerts.
+- **`notifications_only`**: Live-status notifications only. Monitors channel online/offline state via `LiveChannelListener` and sends Telegram live stream announcements without spawning audio streaming, Groq translation, Gemini verification, or trade analysis pipelines.
 
 ```yaml
 channels:
@@ -95,22 +95,19 @@ channels:
     enabled: true
     mode: full_analysis
     trigger_keywords:
-      - trade active
-      - entry banti thi
-      - entry banayi
-      - entry le li
-      - enter kiya
-      - trade banao
-      - manual enter karo
-      - selling ki trade
-      - selling trade
-      - trade running
-      - short entry
-      - sell side ki trade
-      - buy karenge
-      - buy kiya
-      - long kiya
-      - limit order active
+      - active
+      - activated
+      - entry
+      - entered
+      - bought
+      - buy
+      - sold
+      - sell
+      - short
+      - long
+      - position
+      - executed
+      - order placed
     trader_profile: Mehak Trades is an SMC and price action Forex and Gold trader broadcasting live commentary in Hindi/Hinglish. She focuses on XAUUSD, Gold, Forex, Bitcoin, Order Blocks, Fair Value Gaps (FVG), liquidity sweeps, and trade setups.
 
   - name: "Naresh Cool Trader"
@@ -118,34 +115,30 @@ channels:
     enabled: true
     mode: notifications_only
     trigger_keywords:
-      - trade active
-      - call liya
-      - put liya
-      - ce buy kiya
-      - pe buy kiya
-      - entry le li
-      - entry banao
-      - enter kiya
-      - trade banao
-      - scalping trade
-      - buy karenge
-      - buy kiya
-      - short karenge
-      - selling trade
-      - limit order active
-      - order lag gaya
-      - sl laga lo
-      - target hit
-      - breakout ho gaya
-      - position banayi
+      - active
+      - activated
+      - entry
+      - entered
+      - bought
+      - buy
+      - sold
+      - sell
+      - short
+      - long
+      - position
+      - executed
+      - order placed
+      - call option
+      - put option
+      - scalping
+      - breakout
     trader_profile: Naresh Cool Trader is an Indian stock market index options and scalping trader broadcasting live commentary in Hindi. He focuses on NIFTY, BANKNIFTY, FINNIFTY, Option Buying (CE/PE), scalping setups, price action levels, support/resistance, CPR, and fast order executions.
 
 audio:
-  model: "whisper-large-v3-turbo"
+  model: "whisper-large-v3"
   chunk_duration_seconds: 10.0
   context_buffer_seconds: 120
-  language: "hi"
-  initial_prompt: "Gold, XAUUSD, BTC, Bitcoin, Forex, Order Block, FVG, Liquidity, Entry, SL, TP, Target, Buy, Sell, Long, Short, Call, Put, Breakout."
+  initial_prompt: "Trade active. Entry taken. Buy executed. Sell executed. Short position. Long position. Stop loss. Target hit. Order placed. Gold, XAUUSD, BTC, Bitcoin, Forex."
   temperature: 0.0
 
 capture:
@@ -311,7 +304,7 @@ python -m src.whisper_benchmark --recordings-dir data/ --models tiny base small
 Run the standalone offline performance evaluator to benchmark local hot path execution latency, throughput, and percentiles (mean, median, p95, p99) without network access, credentials, or live streams.
 
 #### A. Evaluated Hot Paths
-1. **`audio_trigger_detection`**: In-memory `RollingTranscriptBuffer` ingestion, time-window pruning, context formatting, and `AudioTriggerDetector` regex matching across a deterministic bilingual corpus.
+1. **`audio_trigger_detection`**: In-memory `RollingTranscriptBuffer` ingestion, time-window pruning, context formatting, and `AudioTriggerDetector` regex matching across a deterministic English-translated corpus.
 2. **`trade_state_transitions`**: `TradeStateTracker` 4-step lifecycle transition evaluations (`IDLE` -> `NEW_TRADE` -> `STILL_ACTIVE` -> `TRADE_CLOSED`).
 3. **`cv_filter_720p`**: `CVFilter` HSV masking, morphological horizontal structuring, and Hough line transform over deterministic synthetic 1280x720 (720p) BGR frames.
 4. **`session_metrics_persistence`**: `LiveSessionLogger` thread-safe session creation, metric increments, atomic JSON file replacement, and summary aggregation in an isolated temporary store.

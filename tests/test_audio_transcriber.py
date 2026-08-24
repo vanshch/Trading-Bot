@@ -17,7 +17,7 @@ from pydantic import SecretStr
 
 from src.audio_transcriber import (
     GROQ_MODELS_URL,
-    GROQ_TRANSCRIPTIONS_URL,
+    GROQ_TRANSLATIONS_URL,
     AudioTranscriber,
     pcm_to_wav_bytes,
 )
@@ -111,9 +111,9 @@ class TestAudioTranscriberConfigAndInit(unittest.TestCase):
 
     def test_default_config_values(self) -> None:
         transcriber = AudioTranscriber(api_key="gsk_test")
-        self.assertEqual(transcriber.config.model, "whisper-large-v3-turbo")
+        self.assertEqual(transcriber.config.model, "whisper-large-v3")
         self.assertEqual(transcriber.config.temperature, 0.0)
-        self.assertEqual(transcriber.config.language, "hi")
+        self.assertIsNone(transcriber.config.language)
         self.assertEqual(transcriber.config.chunk_duration_seconds, 10.0)
         self.assertEqual(transcriber.config.max_retries, 3)
 
@@ -123,9 +123,8 @@ class TestAudioTranscriberTranscription(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self) -> None:
         self.config = AudioSTTConfig(
-            model="whisper-large-v3-turbo",
+            model="whisper-large-v3",
             temperature=0.0,
-            language="hi",
             initial_prompt="Nifty, Buy, Sell",
             timeout_seconds=2.0,
             max_retries=3,
@@ -172,7 +171,7 @@ class TestAudioTranscriberTranscription(unittest.IsolatedAsyncioTestCase):
 
         # Check call arguments: url, headers, and form data
         called_url, called_kwargs = mock_post.call_args[0][0], mock_post.call_args[1]
-        self.assertEqual(called_url, GROQ_TRANSCRIPTIONS_URL)
+        self.assertEqual(called_url, GROQ_TRANSLATIONS_URL)
         self.assertEqual(called_kwargs["headers"]["Authorization"], "Bearer gsk_test_mock_key_xyz")
 
         # Inspect FormData fields
@@ -181,7 +180,7 @@ class TestAudioTranscriberTranscription(unittest.IsolatedAsyncioTestCase):
         self.assertIn("file", field_names)
         self.assertIn("model", field_names)
         self.assertIn("temperature", field_names)
-        self.assertIn("language", field_names)
+        self.assertNotIn("language", field_names)
         self.assertIn("prompt", field_names)
         self.assertIn("response_format", field_names)
 
@@ -285,36 +284,165 @@ class TestAudioTranscriberTranscription(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "")
         self.assertEqual(mock_post.call_count, self.config.max_retries)
 
+    async def test_transcribe_pcm_chunk_omits_language_field_even_if_configured(self) -> None:
+        cfg = AudioSTTConfig(language="hi", initial_prompt="Trade prompt")
+        transcriber = AudioTranscriber(config=cfg, api_key="gsk_test_key")
+        pcm = create_mock_pcm()
+        mock_resp = MockClientResponse(status=200, json_data={"text": "Translated English text"})
+        mock_post = MagicMock(return_value=mock_resp)
+        mock_session = MagicMock()
+        mock_session.post = mock_post
+        mock_session.close = AsyncMock()
+        mock_session.closed = False
+        transcriber._session = mock_session
+
+        res = await transcriber.transcribe_pcm_chunk(pcm)
+        self.assertEqual(res, "Translated English text")
+        called_url, called_kwargs = mock_post.call_args[0][0], mock_post.call_args[1]
+        self.assertEqual(called_url, GROQ_TRANSLATIONS_URL)
+        form = called_kwargs["data"]
+        field_names = [f[0]["name"] for f in form._fields if isinstance(f, tuple) and "name" in f[0]]
+        self.assertNotIn("language", field_names)
+        self.assertIn("prompt", field_names)
+        await transcriber.close()
+
 
 class TestAudioTranscriberPreflightAndLifecycle(unittest.IsolatedAsyncioTestCase):
     """Tests for connection preflight check and session lifecycle."""
 
     def setUp(self) -> None:
-        self.transcriber = AudioTranscriber(api_key="gsk_preflight_test")
+        self.transcriber = AudioTranscriber(
+            config=AudioSTTConfig(model="whisper-large-v3"),
+            api_key="gsk_preflight_test",
+        )
 
     async def asyncTearDown(self) -> None:
         await self.transcriber.close()
 
     async def test_check_connection_success(self) -> None:
-        mock_resp = MockClientResponse(status=200, json_data={"data": []})
-        mock_get = MagicMock(return_value=mock_resp)
+        models_resp = MockClientResponse(
+            status=200,
+            json_data={"data": [{"id": "whisper-large-v3"}, {"id": "llama3-70b"}]},
+        )
+        probe_resp = MockClientResponse(status=200, json_data={"text": ""})
+
+        mock_get = MagicMock(return_value=models_resp)
+        mock_post = MagicMock(return_value=probe_resp)
+
         mock_session = MagicMock()
         mock_session.get = mock_get
+        mock_session.post = mock_post
         mock_session.close = AsyncMock()
         mock_session.closed = False
         self.transcriber._session = mock_session
 
         is_connected = await self.transcriber.check_connection()
         self.assertTrue(is_connected)
-        mock_get.assert_called_once()
-        called_url, called_kwargs = mock_get.call_args[0][0], mock_get.call_args[1]
-        self.assertEqual(called_url, GROQ_MODELS_URL)
-        self.assertEqual(called_kwargs["headers"]["Authorization"], "Bearer gsk_preflight_test")
 
-    async def test_check_connection_failure_status(self) -> None:
+        # Verify GET /models was called
+        mock_get.assert_called_once()
+        get_url, get_kwargs = mock_get.call_args[0][0], mock_get.call_args[1]
+        self.assertEqual(get_url, GROQ_MODELS_URL)
+        self.assertEqual(get_kwargs["headers"]["Authorization"], "Bearer gsk_preflight_test")
+
+        # Verify POST /audio/translations was called for probe
+        mock_post.assert_called_once()
+        post_url, post_kwargs = mock_post.call_args[0][0], mock_post.call_args[1]
+        self.assertEqual(post_url, GROQ_TRANSLATIONS_URL)
+        self.assertEqual(post_kwargs["headers"]["Authorization"], "Bearer gsk_preflight_test")
+
+        form = post_kwargs["data"]
+        field_names = [f[0]["name"] for f in form._fields if isinstance(f, tuple) and "name" in f[0]]
+        self.assertIn("file", field_names)
+        self.assertIn("model", field_names)
+        self.assertIn("response_format", field_names)
+
+    async def test_check_connection_missing_configured_model_returns_false(self) -> None:
+        models_resp = MockClientResponse(
+            status=200,
+            json_data={"data": [{"id": "other-model-1"}, {"id": "other-model-2"}]},
+        )
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(return_value=models_resp)
+        mock_session.post = MagicMock()
+        mock_session.close = AsyncMock()
+        mock_session.closed = False
+        self.transcriber._session = mock_session
+
+        is_connected = await self.transcriber.check_connection()
+        self.assertFalse(is_connected)
+        # Translation probe should not be called if model check fails
+        mock_session.post.assert_not_called()
+
+    async def test_check_connection_models_endpoint_failure_status(self) -> None:
         mock_resp = MockClientResponse(status=401, json_data={"error": "Invalid API Key"})
         mock_session = MagicMock()
         mock_session.get = MagicMock(return_value=mock_resp)
+        mock_session.post = MagicMock()
+        mock_session.close = AsyncMock()
+        mock_session.closed = False
+        self.transcriber._session = mock_session
+
+        is_connected = await self.transcriber.check_connection()
+        self.assertFalse(is_connected)
+        mock_session.post.assert_not_called()
+
+    async def test_check_connection_models_endpoint_invalid_json(self) -> None:
+        mock_resp = MockClientResponse(status=200, raise_json=True)
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(return_value=mock_resp)
+        mock_session.post = MagicMock()
+        mock_session.close = AsyncMock()
+        mock_session.closed = False
+        self.transcriber._session = mock_session
+
+        is_connected = await self.transcriber.check_connection()
+        self.assertFalse(is_connected)
+        mock_session.post.assert_not_called()
+
+    async def test_check_connection_translation_probe_failure_status(self) -> None:
+        models_resp = MockClientResponse(
+            status=200,
+            json_data={"data": [{"id": "whisper-large-v3"}]},
+        )
+        probe_resp = MockClientResponse(status=500, json_data={"error": "Internal probe error"})
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(return_value=models_resp)
+        mock_session.post = MagicMock(return_value=probe_resp)
+        mock_session.close = AsyncMock()
+        mock_session.closed = False
+        self.transcriber._session = mock_session
+
+        is_connected = await self.transcriber.check_connection()
+        self.assertFalse(is_connected)
+        mock_session.get.assert_called_once()
+        mock_session.post.assert_called_once()
+
+    async def test_check_connection_translation_probe_malformed_response(self) -> None:
+        models_resp = MockClientResponse(
+            status=200,
+            json_data={"data": [{"id": "whisper-large-v3"}]},
+        )
+        probe_resp = MockClientResponse(status=200, json_data={"other_key": "no text"})
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(return_value=models_resp)
+        mock_session.post = MagicMock(return_value=probe_resp)
+        mock_session.close = AsyncMock()
+        mock_session.closed = False
+        self.transcriber._session = mock_session
+
+        is_connected = await self.transcriber.check_connection()
+        self.assertFalse(is_connected)
+
+    async def test_check_connection_translation_probe_invalid_json(self) -> None:
+        models_resp = MockClientResponse(
+            status=200,
+            json_data={"data": [{"id": "whisper-large-v3"}]},
+        )
+        probe_resp = MockClientResponse(status=200, raise_json=True)
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(return_value=models_resp)
+        mock_session.post = MagicMock(return_value=probe_resp)
         mock_session.close = AsyncMock()
         mock_session.closed = False
         self.transcriber._session = mock_session
@@ -331,6 +459,32 @@ class TestAudioTranscriberPreflightAndLifecycle(unittest.IsolatedAsyncioTestCase
 
         is_connected = await self.transcriber.check_connection()
         self.assertFalse(is_connected)
+
+    async def test_check_connection_multi_key_fallback(self) -> None:
+        multi_transcriber = AudioTranscriber(
+            config=AudioSTTConfig(model="whisper-large-v3"),
+            api_key=["gsk_key_1_fail", "gsk_key_2_pass"],
+        )
+        # Key 1 fails translation probe (HTTP 500), Key 2 succeeds both
+        models_resp_200 = MockClientResponse(
+            status=200,
+            json_data={"data": [{"id": "whisper-large-v3"}]},
+        )
+        probe_resp_500 = MockClientResponse(status=500, json_data={"error": "Probe error on key 1"})
+        probe_resp_200 = MockClientResponse(status=200, json_data={"text": ""})
+
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(return_value=models_resp_200)
+        mock_session.post = MagicMock(side_effect=[probe_resp_500, probe_resp_200])
+        mock_session.close = AsyncMock()
+        mock_session.closed = False
+        multi_transcriber._session = mock_session
+
+        is_connected = await multi_transcriber.check_connection()
+        self.assertTrue(is_connected)
+        self.assertEqual(mock_session.get.call_count, 2)
+        self.assertEqual(mock_session.post.call_count, 2)
+        await multi_transcriber.close()
 
     async def test_close_and_context_manager(self) -> None:
         async with AudioTranscriber(api_key="gsk_test") as at:
@@ -459,7 +613,7 @@ class TestAudioTranscriberOfflineNetworkGuard(unittest.IsolatedAsyncioTestCase):
         with patch("aiohttp.ClientSession", side_effect=AssertionError("Live session created!")):
             mock_session = MagicMock()
             mock_session.post = MagicMock(return_value=MockClientResponse(status=200, json_data={"text": "guard ok"}))
-            mock_session.get = MagicMock(return_value=MockClientResponse(status=200, json_data={"data": []}))
+            mock_session.get = MagicMock(return_value=MockClientResponse(status=200, json_data={"data": [{"id": "whisper-large-v3"}]}))
             mock_session.close = AsyncMock()
             mock_session.closed = False
             transcriber = AudioTranscriber(
@@ -495,9 +649,13 @@ class TestAudioTranscriberOfflineNetworkGuard(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(mock_session.post.call_count, 2)
 
             # 4. Test preflight check_connection
+            mock_session.post.reset_mock()
+            mock_session.post.side_effect = None
+            mock_session.post.return_value = MockClientResponse(status=200, json_data={"text": ""})
             is_connected = await transcriber.check_connection()
             self.assertTrue(is_connected)
             self.assertEqual(mock_session.get.call_count, len(keys))
+            self.assertEqual(mock_session.post.call_count, len(keys))
 
             # 5. Test file transcription
             with tempfile.TemporaryDirectory() as tmp_dir:

@@ -208,15 +208,15 @@ def evaluate_audio_trigger_detection(
 ) -> ScenarioResult:
     """Benchmark RollingTranscriptBuffer ingestion and AudioTriggerDetector matching."""
     corpus = [
-        "Haan bhai yahan pe enter kiya humne call option mein",
-        "Market sideways chal raha hai resistance level 24500 pe",
-        "NIFTY 24500 CE buy kiya hai target 150",
-        "Volume dry up ho raha hai abhi koi trade mat lena",
-        "Maine position banayi hai short side pe",
-        "Breakout candidate form ho raha hai 15m timeframe pe",
-        "Order execute ho gaya stop loss 20 points",
-        "Banknifty 52000 put liya fast scalp ke liye",
-        "Daily support line hold kar raha hai",
+        "Yes brother here we entered in call option",
+        "Market is moving sideways at resistance level 24500",
+        "NIFTY 24500 CE buy executed target 150",
+        "Volume is drying up now do not take any trade",
+        "I have taken position on short side",
+        "Breakout candidate is forming on 15m timeframe",
+        "Order executed stop loss 20 points",
+        "Banknifty 52000 put taken for fast scalp",
+        "Daily support line is holding here",
         "Took position in index call spread",
     ]
 

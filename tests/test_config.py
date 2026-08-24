@@ -101,10 +101,14 @@ class TestConfigValidation(unittest.TestCase):
     def test_current_default_audio_stt_config(self) -> None:
         from src.config import AudioSTTConfig
         audio_cfg = AudioSTTConfig()
-        self.assertEqual(audio_cfg.model, "whisper-large-v3-turbo")
+        self.assertEqual(audio_cfg.model, "whisper-large-v3")
         self.assertEqual(audio_cfg.temperature, 0.0)
         self.assertEqual(audio_cfg.chunk_duration_seconds, 10.0)
-        self.assertEqual(audio_cfg.language, "hi")
+        self.assertIsNone(audio_cfg.language)
+        self.assertEqual(
+            audio_cfg.initial_prompt,
+            "Trade active. Entry taken. Buy executed. Sell executed. Short position. Long position. Stop loss. Target hit. Order placed. Gold, XAUUSD, BTC, Bitcoin, Forex.",
+        )
 
     def test_valid_roi_crop(self) -> None:
         roi = ROICropConfig(top=0.1, bottom=0.9, left=0.2, right=0.8)
@@ -348,10 +352,12 @@ class TestLoadConfig(unittest.TestCase):
             mehak.url, "https://www.youtube.com/@tradewithmehaktrades/live"
         )
         self.assertGreater(len(mehak.trigger_keywords), 0)
-        self.assertIn("selling trade", mehak.trigger_keywords)
-        self.assertIn("trade running", mehak.trigger_keywords)
-        self.assertIn("long active", mehak.trigger_keywords)
-        self.assertIn("short active", mehak.trigger_keywords)
+        self.assertIn("active", mehak.trigger_keywords)
+        self.assertIn("entry", mehak.trigger_keywords)
+        self.assertIn("buy", mehak.trigger_keywords)
+        self.assertIn("sell", mehak.trigger_keywords)
+        self.assertIn("short", mehak.trigger_keywords)
+        self.assertIn("long", mehak.trigger_keywords)
         self.assertIsNotNone(mehak.trader_profile)
 
         # Naresh Cool Trader must be enabled with notifications_only

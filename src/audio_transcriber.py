@@ -1,4 +1,4 @@
-"""Speech-to-Text transcriber using Groq OpenAI-compatible audio transcription API."""
+"""Speech-to-Text translator using Groq OpenAI-compatible audio translations API (always outputs English)."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from src.config import AudioSTTConfig, ConfigurationError
 logger = logging.getLogger("trade_bot.audio_transcriber")
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
-GROQ_TRANSCRIPTIONS_URL = f"{GROQ_BASE_URL}/audio/transcriptions"
+GROQ_TRANSLATIONS_URL = f"{GROQ_BASE_URL}/audio/translations"
 GROQ_MODELS_URL = f"{GROQ_BASE_URL}/models"
 
 
@@ -40,7 +40,7 @@ def pcm_to_wav_bytes(
 
 
 class AudioTranscriber:
-    """Wraps Groq Audio Transcription API to transcribe in-memory PCM chunks and audio files."""
+    """Wrap Groq Audio Translations for English output from PCM chunks and files."""
 
     def __init__(
         self,
@@ -142,22 +142,91 @@ class AudioTranscriber:
         return self._session
 
     async def check_connection(self) -> bool:
-        """Explicit connection preflight verifying Groq API credentials and endpoint accessibility."""
+        """Explicit connection preflight verifying credentials, model availability, and translation endpoint readiness."""
         any_success = False
         session = self._get_session()
+        probe_wav_bytes = pcm_to_wav_bytes(b"\x00\x00" * 1600, sample_rate=16000)
+
         for idx, key in enumerate(self._api_keys, start=1):
             headers = {
                 "Authorization": f"Bearer {key.get_secret_value()}",
             }
             try:
+                # Step 1: Validate credentials and verify configured model is listed
                 async with session.get(GROQ_MODELS_URL, headers=headers) as resp:
-                    if 200 <= resp.status < 300:
-                        logger.info(f"Groq STT API key #{idx} connection preflight passed.")
-                        any_success = True
-                    else:
+                    if not (200 <= resp.status < 300):
                         logger.warning(
-                            f"Groq STT API key #{idx} preflight returned HTTP status {resp.status}."
+                            f"Groq STT API key #{idx} models preflight returned HTTP status {resp.status}."
                         )
+                        continue
+
+                    try:
+                        models_data = await resp.json()
+                    except Exception:  # noqa: BLE001 - JSON decode boundary
+                        logger.warning(
+                            f"Groq STT API key #{idx} models preflight returned invalid JSON."
+                        )
+                        continue
+
+                    model_list = (
+                        models_data.get("data", [])
+                        if isinstance(models_data, dict)
+                        else []
+                    )
+                    available_model_ids = {
+                        m.get("id")
+                        for m in model_list
+                        if isinstance(m, dict) and "id" in m
+                    }
+
+                    if self.config.model not in available_model_ids:
+                        logger.warning(
+                            f"Groq STT API key #{idx} preflight: Configured model '{self.config.model}' "
+                            f"not found in available models: {sorted(available_model_ids) if available_model_ids else 'none'}."
+                        )
+                        continue
+
+                # Step 2: Validate translation endpoint request path/contract with minimal in-memory probe
+                probe_form = aiohttp.FormData()
+                probe_form.add_field(
+                    "file",
+                    probe_wav_bytes,
+                    filename="probe.wav",
+                    content_type="audio/wav",
+                )
+                probe_form.add_field("model", self.config.model)
+                probe_form.add_field("response_format", "json")
+
+                async with session.post(
+                    GROQ_TRANSLATIONS_URL,
+                    data=probe_form,
+                    headers=headers,
+                ) as probe_resp:
+                    if not (200 <= probe_resp.status < 300):
+                        logger.warning(
+                            f"Groq STT API key #{idx} translation probe returned HTTP status {probe_resp.status}."
+                        )
+                        continue
+
+                    try:
+                        probe_data = await probe_resp.json()
+                    except Exception:  # noqa: BLE001 - JSON decode boundary
+                        logger.warning(
+                            f"Groq STT API key #{idx} translation probe returned invalid JSON."
+                        )
+                        continue
+
+                    if not isinstance(probe_data, dict) or "text" not in probe_data:
+                        logger.warning(
+                            f"Groq STT API key #{idx} translation probe returned malformed response schema (missing 'text')."
+                        )
+                        continue
+
+                    logger.info(
+                        f"Groq STT API key #{idx} translation preflight passed (model '{self.config.model}' verified)."
+                    )
+                    any_success = True
+
             except Exception as exc:  # noqa: BLE001 - preflight error boundary
                 logger.warning(
                     f"Groq STT API key #{idx} preflight failed with exception: {type(exc).__name__}"
@@ -280,8 +349,6 @@ class AudioTranscriber:
             )
             form.add_field("model", self.config.model)
             form.add_field("temperature", str(self.config.temperature))
-            if self.config.language:
-                form.add_field("language", self.config.language)
             if self.config.initial_prompt:
                 form.add_field("prompt", self.config.initial_prompt)
             form.add_field("response_format", "json")
@@ -289,7 +356,7 @@ class AudioTranscriber:
             try:
                 session = self._get_session()
                 async with session.post(
-                    GROQ_TRANSCRIPTIONS_URL,
+                    GROQ_TRANSLATIONS_URL,
                     data=form,
                     headers=headers,
                 ) as resp:
@@ -379,7 +446,7 @@ class AudioTranscriber:
                 return ""
             except Exception as exc:  # noqa: BLE001 - unexpected boundary
                 logger.error(
-                    f"Unexpected error during Groq STT transcription: {type(exc).__name__}"
+                    f"Unexpected error during Groq audio translation: {type(exc).__name__}"
                 )
                 return ""
 

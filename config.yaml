@@ -14,59 +14,51 @@ channels:
   enabled: true
   mode: full_analysis
   trigger_keywords:
-  - trade active
-  - entry banti thi
-  - entry banayi
-  - entry le li
-  - enter kiya
-  - trade banao
-  - manual enter karo
-  - selling ki trade
-  - selling trade
-  - trade running
-  - short entry
-  - sell side ki trade
-  - buy karenge
-  - buy kiya
-  - long kiya
-  - long active
-  - short active
-  - limit order active
+  - active
+  - activated
+  - entry
+  - entered
+  - bought
+  - buy
+  - sold
+  - sell
+  - short
+  - long
+  - position
+  - executed
+  - order placed
   trader_profile: Mehak Trades is an SMC and price action Forex and Gold trader broadcasting live commentary in Hindi/Hinglish. She focuses on XAUUSD, Gold, Forex, Bitcoin, Order Blocks, Fair Value Gaps (FVG), liquidity sweeps, and trade setups.
 - name: Naresh Cool Trader
   url: https://www.youtube.com/@NareshCoolTrader/live
   enabled: true
   mode: notifications_only
   trigger_keywords:
-  - trade active
-  - call liya
-  - put liya
-  - ce buy kiya
-  - pe buy kiya
-  - entry le li
-  - entry banao
-  - enter kiya
-  - trade banao
-  - scalping trade
-  - buy karenge
-  - buy kiya
-  - short karenge
-  - selling trade
-  - limit order active
-  - order lag gaya
-  - sl laga lo
-  - target hit
-  - breakout ho gaya
-  - position banayi
-  trader_profile: Naresh Cool Trader is an Indian stock market index options and scalping trader broadcasting
+  - active
+  - activated
+  - entry
+  - entered
+  - bought
+  - buy
+  - sold
+  - sell
+  - short
+  - long
+  - position
+  - executed
+  - order placed
+  - call option
+  - put option
+  - scalping
+  - breakout
+  trader_profile: >
+    Naresh Cool Trader is an Indian stock market index options and scalping trader broadcasting
     live commentary in Hindi. He focuses on NIFTY, BANKNIFTY, FINNIFTY, Option Buying (CE/PE),
     scalping setups, price action levels, support/resistance, CPR, and fast order executions.
 audio:
-  model: whisper-large-v3-turbo
+  model: whisper-large-v3
   chunk_duration_seconds: 10.0
   context_buffer_seconds: 120
-  language: hi
-  initial_prompt: Gold, XAUUSD, BTC, Bitcoin, Forex, Order Block, FVG, Liquidity, Entry, SL, TP, Target, Buy, Sell, Long, Short, Call, Put, Breakout.
+  initial_prompt: "Trade active. Entry taken. Buy executed. Sell executed. Short position. Long position. Stop loss. Target hit. Order placed. Gold, XAUUSD, BTC, Bitcoin, Forex."
   temperature: 0.0
   timeout_seconds: 10.0
   max_retries: 3

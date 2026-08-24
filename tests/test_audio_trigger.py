@@ -46,75 +46,87 @@ def test_rolling_transcript_buffer_empty_and_clear():
     assert buffer.get_context_text() == ""
 
 
-def test_audio_trigger_detector_hindi_and_hinglish():
+def test_audio_trigger_detector_english_trade_phrases():
+    """Whisper-translated English trade phrases must trigger detection."""
     detector = AudioTriggerDetector(
-        trigger_keywords=["enter kiya", "entry banayi", "call buy"],
+        trigger_keywords=["active", "activated", "entry", "buy", "sell", "short", "sold"],
         cooldown_seconds=5.0,
     )
 
-    # Positive matches
-    is_trig, kw = detector.check_trigger("Haan bhai yahan pe enter kiya humne")
-    assert is_trig is True
-    assert kw == "enter kiya"
+    # "मैंने एक्टिव करी है" → Whisper translates to something like:
+    assert detector.check_trigger("I have activated it and safe traders can wait for closing")[0] is True
 
     detector.reset_cooldown()
-    is_trig, kw = detector.check_trigger("48000 pe entry banayi hai")
-    assert is_trig is True
-    assert kw == "entry banayi"
+    assert detector.check_trigger("I took the entry at 45.50 level")[0] is True
 
     detector.reset_cooldown()
-    is_trig, kw = detector.check_trigger("CALL BUY karo yahan")
-    assert is_trig is True
-    assert kw == "call buy"
+    assert detector.check_trigger("We will buy from this support zone")[0] is True
+
+    detector.reset_cooldown()
+    assert detector.check_trigger("I sold at the order block level")[0] is True
 
 
-def test_audio_trigger_detector_negative_matches():
+def test_audio_trigger_detector_negative_english():
+    """Analysis phrases should NOT trigger."""
     detector = AudioTriggerDetector(
-        trigger_keywords=["enter kiya", "buy now"],
+        trigger_keywords=["active", "entry", "buy", "sell"],
         cooldown_seconds=5.0,
     )
+    # Discussion about price levels without execution
+    assert detector.check_trigger("The price is near support but let us wait")[0] is False
+    assert detector.check_trigger("We are watching the candle close")[0] is False
+    assert detector.check_trigger("")[0] is False
+    assert detector.check_trigger("   ")[0] is False
 
-    is_trig, kw = detector.check_trigger(
-        "Market sideways chal raha hai koi trade mat lena"
-    )
-    assert is_trig is False
-    assert kw is None
+
+def test_audio_trigger_detector_default_fallback_keywords():
+    detector = AudioTriggerDetector(cooldown_seconds=5.0)
+    assert detector.check_trigger("Order placed for Gold long")[0] is True
+    detector.reset_cooldown()
+    assert detector.check_trigger("Position executed now")[0] is True
+    detector.reset_cooldown()
+    assert detector.check_trigger("We entered at this candle")[0] is True
+    detector.reset_cooldown()
+    assert detector.check_trigger("Bought 2 lots here")[0] is True
 
 
-def test_audio_trigger_detector_cooldown():
+def test_audio_trigger_detector_word_boundaries():
     detector = AudioTriggerDetector(
-        trigger_keywords=["enter kiya"],
+        trigger_keywords=["buy", "sell", "active"],
+        cooldown_seconds=5.0,
+    )
+    # Substrings like "buyer", "reseller", "inactive" should not trigger \b boundaries
+    assert detector.check_trigger("The buyers are stepping in")[0] is False
+    assert detector.check_trigger("Contact the reseller")[0] is False
+    assert detector.check_trigger("The state is inactive")[0] is False
+    # Exact words with punctuation should trigger
+    assert detector.check_trigger("Let's buy!")[0] is True
+
+
+def test_audio_trigger_detector_cooldown_and_update():
+    detector = AudioTriggerDetector(
+        trigger_keywords=["entry"],
         cooldown_seconds=10.0,
     )
-
     # First trigger fires
-    is_trig, _kw = detector.check_trigger("maine enter kiya")
+    is_trig, kw = detector.check_trigger("Taking entry now")
     assert is_trig is True
+    assert kw == "entry"
 
     # Immediate repetition within cooldown is suppressed
-    is_trig2, kw2 = detector.check_trigger("maine enter kiya fir se")
+    is_trig2, kw2 = detector.check_trigger("Taking entry now again")
     assert is_trig2 is False
     assert kw2 is None
 
     # After reset, fires again
     detector.reset_cooldown()
-    is_trig3, _kw3 = detector.check_trigger("maine enter kiya abhi")
+    is_trig3, kw3 = detector.check_trigger("Taking entry now again")
     assert is_trig3 is True
+    assert kw3 == "entry"
 
-
-def test_audio_trigger_detector_mehak_active_position_phrases():
-    """Mehak's observed live-position wording must trigger trade evaluation."""
-    detector = AudioTriggerDetector(
-        trigger_keywords=["long active", "short active"], cooldown_seconds=5.0
-    )
-
-    assert detector.check_trigger("Yes, I am also long active") == (
-        True,
-        "long active",
-    )
-
+    # Update keywords dynamically
     detector.reset_cooldown()
-    assert detector.check_trigger("Now the short active position is running") == (
-        True,
-        "short active",
-    )
+    detector.update_keywords(["breakout", "scalp"])
+    assert detector.check_trigger("Breakout confirmed")[0] is True
+    detector.reset_cooldown()
+    assert detector.check_trigger("Taking entry now")[0] is False

@@ -7,34 +7,21 @@ from dataclasses import dataclass
 
 logger = logging.getLogger("trade_bot.audio_trigger")
 
-DEFAULT_FALLBACK_KEYWORDS = [
-    # Hindi / Hinglish Entry Triggers
-    "enter kiya",
-    "entry li",
-    "entry banayi",
-    "entry leli",
-    "buy kiya",
-    "call liya",
-    "put liya",
-    "call buy",
-    "put buy",
-    "short kiya",
-    "position banayi",
-    "position li",
-    "order lag gaya",
-    "order execute",
-    "trade active",
-    "humne le liya",
-    "maine buy kar liya",
-    # English Triggers
+DEFAULT_FALLBACK_KEYWORDS: list[str] = [
+    # English execution triggers (Whisper /translations always outputs English)
+    "active",
+    "activated",
+    "entry",
+    "entered",
     "bought",
-    "entered trade",
-    "took position",
+    "buy",
+    "sold",
+    "sell",
+    "short",
+    "long",
+    "position",
+    "executed",
     "order placed",
-    "going long",
-    "going short",
-    "buy call",
-    "buy put",
 ]
 
 
@@ -112,7 +99,7 @@ class AudioTriggerDetector:
         self._compile_patterns()
 
     def _compile_patterns(self) -> None:
-        """Compile keyword patterns for fast case-insensitive matching."""
+        """Compile keyword patterns for fast matching."""
         self._compiled_patterns.clear()
         for kw in self.keywords:
             # Escape keyword and allow flexible whitespace between words

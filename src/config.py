@@ -19,10 +19,10 @@ class ChannelMode(str, Enum):
     """Monitoring mode for a configured YouTube channel.
 
     - FULL_ANALYSIS: Full trade analysis pipeline including live status notifications,
-      real-time audio STT transcription, keyword trigger detection, Gemini multimodal
+      real-time audio translation, English keyword detection, Gemini multimodal
       verification, and trade alerts.
     - NOTIFICATIONS_ONLY: Live status notifications only via Telegram without audio capture,
-      STT transcription, Gemini verification, session analysis, or trade alerts.
+      audio translation, Gemini verification, session analysis, or trade alerts.
     """
 
     FULL_ANALYSIS = "full_analysis"
@@ -205,12 +205,12 @@ class AIConfig(BaseModel):
 
 
 class AudioSTTConfig(BaseModel):
-    """Groq Speech-To-Text (Whisper) and audio streaming parameters."""
+    """Groq Speech-To-Text / Audio Translation (Whisper) and streaming parameters."""
 
     model: str = Field(
-        default="whisper-large-v3-turbo",
+        default="whisper-large-v3",
         min_length=1,
-        description="Groq Whisper model name (e.g. whisper-large-v3-turbo)",
+        description="Groq Whisper model name for English translation (e.g. whisper-large-v3)",
     )
     chunk_duration_seconds: float = Field(
         default=10.0,
@@ -225,18 +225,18 @@ class AudioSTTConfig(BaseModel):
         description="Rolling window duration for recent spoken context retained in memory",
     )
     language: str | None = Field(
-        default="hi",
-        description="Language code for transcription hint ('hi' for Hindi/Hinglish, 'en', or None for auto)",
+        default=None,
+        description="Language code hint (unused with /translations endpoint; kept for backward compatibility)",
     )
     initial_prompt: str = Field(
-        default="Nifty, BankNifty, Sensex, Call, Put, CE, PE, Buy, Sell, SL, Target, Stop Loss, Entry, Exit, Long, Short, Premium, Breakout, Resistance, Support.",
-        description="Initial vocabulary prompt to bias Whisper STT toward trading terms and tickers",
+        default="Trade active. Entry taken. Buy executed. Sell executed. Short position. Long position. Stop loss. Target hit. Order placed. Gold, XAUUSD, BTC, Bitcoin, Forex.",
+        description="Initial vocabulary prompt to bias Whisper translation toward English trading terms and tickers",
     )
     temperature: float = Field(
         default=0.0,
         ge=0.0,
         le=1.0,
-        description="Sampling temperature for transcription (0 for deterministic output)",
+        description="Sampling temperature for translation (0 for deterministic output)",
     )
     timeout_seconds: float = Field(
         default=10.0,

@@ -197,6 +197,7 @@ class MultimodalVerifier:
         client: Any,
         jpeg_bytes: bytes,
         prompt_text: str,
+        model_name: str | None = None,
     ) -> str:
         """Synchronous Gemini call sending screenshot image and transcript prompt."""
         from google import genai  # noqa: F401 (unused variable kept for type hint)
@@ -212,8 +213,9 @@ class MultimodalVerifier:
             ),
         )
 
+        target_model = model_name or self.config.model_name
         response = client.models.generate_content(
-            model=self.config.model_name,
+            model=target_model,
             contents=[image_part, prompt_text],
             config=config,
         )
@@ -265,28 +267,38 @@ class MultimodalVerifier:
             transcript_context=transcript_context or "No transcript commentary available.",
         )
 
+        models_to_try = [self.config.model_name]
+        for fallback in ("gemini-2.5-flash", "gemini-3.7-flash"):
+            if fallback not in models_to_try:
+                models_to_try.append(fallback)
+
         client = self._get_client()
         delay = self.config.retry_delay_seconds
 
         for attempt in range(1, self.config.max_retries + 1):
+            model_to_use = models_to_try[(attempt - 1) % len(models_to_try)]
             try:
                 raw_text = await asyncio.to_thread(
-                    self._call_gemini_multimodal_sync, client, jpeg_bytes, prompt_text
+                    self._call_gemini_multimodal_sync,
+                    client,
+                    jpeg_bytes,
+                    prompt_text,
+                    model_to_use,
                 )
                 verification = self._parse_response(raw_text)
                 logger.info(
-                    f"Multimodal Verification result: is_active={verification.is_trade_active}, "
+                    f"Multimodal Verification result ({model_to_use}): is_active={verification.is_trade_active}, "
                     f"direction={verification.direction}, instrument={verification.instrument}, "
                     f"confidence={verification.confidence:.2f}"
                 )
                 return verification
             except Exception as exc:  # noqa: BLE001 - SDK boundary exposes varied exceptions
                 logger.warning(
-                    f"Gemini Multimodal attempt {attempt}/{self.config.max_retries} failed: {exc}"
+                    f"Gemini Multimodal attempt {attempt}/{self.config.max_retries} with model {model_to_use} failed: {exc}"
                 )
                 if attempt < self.config.max_retries:
                     await asyncio.sleep(delay)
-                    delay *= 2.0
+                    delay = min(delay * 2.0, 30.0)
 
         # Safe fallback
         return MultimodalTradeVerification(
