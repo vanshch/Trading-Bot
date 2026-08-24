@@ -336,6 +336,144 @@ class TelegramNotifier:
             }
             return await self._post_telegram_request("sendMessage", data=payload)
 
+    def format_management_alert_message(
+        self,
+        channel_name: str,
+        verification: Any,  # MultimodalTradeVerification
+        stream_url: str,
+        elapsed_seconds: float | None = None,
+    ) -> str:
+        """Construct formatted alert message for a trade management action (partial exit, stop move, exit)."""
+        now = datetime.now(timezone.utc)
+        time_str = self._format_timestamp(now)
+
+        signal_type = str(getattr(verification, "signal_type", "NONE")).upper().strip()
+        if signal_type == "PARTIAL_EXIT":
+            action_badge = "💰 PARTIAL PROFIT BOOKED"
+        elif signal_type == "MOVE_STOP":
+            action_badge = "🛡️ STOP MOVED / TRAILING (CTC)"
+        elif signal_type == "EXIT":
+            action_badge = "🏁 POSITION CLOSED / CUT"
+        else:
+            action_badge = f"📋 MANAGEMENT: {html.escape(signal_type)}"
+
+        direction = str(getattr(verification, "direction", "NONE")).upper()
+        if direction in ("CALL", "CE"):
+            direction_badge = "🟢 CALL (CE)"
+        elif direction in ("PUT", "PE"):
+            direction_badge = "🔴 PUT (PE)"
+        elif direction == "BUY":
+            direction_badge = "📈 BUY (Long)"
+        elif direction == "SELL":
+            direction_badge = "📉 SELL (Short)"
+        else:
+            direction_badge = ""
+
+        instrument = str(getattr(verification, "instrument", "UNKNOWN"))
+        quote = str(getattr(verification, "trigger_quote", ""))
+        entry = getattr(verification, "entry_price", None)
+        sl = getattr(verification, "stop_loss", None)
+        target = getattr(verification, "target", None)
+        try:
+            confidence = int(
+                max(0.0, min(1.0, float(getattr(verification, "confidence", 0.0))))
+                * 100
+            )
+        except (TypeError, ValueError):
+            confidence = 0
+        reasoning = str(getattr(verification, "reasoning", ""))
+
+        # Format stream link with timestamp if available
+        stream_link = stream_url
+        if elapsed_seconds is not None and elapsed_seconds > 0:
+            h = int(elapsed_seconds // 3600)
+            m = int((elapsed_seconds % 3600) // 60)
+            s = int(elapsed_seconds % 60)
+            t_param = f"{h}h{m}m{s}s" if h > 0 else f"{m}m{s}s"
+            delim = "&" if "?" in stream_url else "?"
+            stream_link = f"{stream_url}{delim}t={t_param}"
+
+        lines = [
+            f"🛠️ <b>TRADE MANAGEMENT: {html.escape(channel_name)}</b>",
+            "━━━━━━━━━━━━━━━━━━━━",
+            f"⚡ <b>Action:</b> {action_badge}",
+        ]
+
+        if instrument and instrument != "UNKNOWN":
+            lines.append(f"🎯 <b>Instrument:</b> <code>{html.escape(instrument)}</code>")
+
+        if direction_badge:
+            lines.append(f"📊 <b>Direction:</b> {direction_badge}")
+
+        if entry:
+            lines.append(
+                f"💵 <b>Entry/Price:</b> <code>{html.escape(str(entry))}</code>"
+            )
+
+        if sl or target:
+            sl_text = f"SL: {html.escape(str(sl))}" if sl else ""
+            tgt_text = f"TGT: {html.escape(str(target))}" if target else ""
+            lines.append(f"🛡️ <b>Levels:</b> <code>{' | '.join(filter(None, [sl_text, tgt_text]))}</code>")
+
+        if quote:
+            lines.append(f'🗣️ <b>Spoken Evidence:</b> <i>"{html.escape(quote)}"</i>')
+
+        lines.extend([
+            f"⏰ <b>Time:</b> {html.escape(time_str)} (Conf: {confidence}%)",
+            f'🔗 <b>Live Stream:</b> <a href="{html.escape(stream_link, quote=True)}">Watch at timestamp</a>',
+        ])
+
+        if reasoning:
+            lines.append(f"💡 <i>{html.escape(reasoning)}</i>")
+
+        lines.append("━━━━━━━━━━━━━━━━━━━━")
+        return "\n".join(lines)
+
+    async def send_management_alert(
+        self,
+        channel_name: str,
+        verification: Any,
+        stream_url: str,
+        frame_bytes: bytes | None = None,
+        elapsed_seconds: float | None = None,
+    ) -> bool:
+        """Send a dedicated management alert with live screenshot and stream timestamp link."""
+        text = self.format_management_alert_message(
+            channel_name=channel_name,
+            verification=verification,
+            stream_url=stream_url,
+            elapsed_seconds=elapsed_seconds,
+        )
+
+        # Telegram photo captions are limited to 1024 characters. Fall back to a
+        # regular message rather than let an otherwise valid alert fail delivery.
+        if self.config.include_screenshot and frame_bytes and len(text) <= 1024:
+
+            def build_form() -> aiohttp.FormData:
+                form = aiohttp.FormData()
+                form.add_field("chat_id", self.chat_id)
+                form.add_field("caption", text)
+                form.add_field("parse_mode", "HTML")
+                form.add_field(
+                    "photo",
+                    io.BytesIO(frame_bytes),
+                    filename="trade_management.jpg",
+                    content_type="image/jpeg",
+                )
+                return form
+
+            return await self._post_telegram_request(
+                "sendPhoto", form_data_factory=build_form
+            )
+        else:
+            payload = {
+                "chat_id": self.chat_id,
+                "text": text,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": False,
+            }
+            return await self._post_telegram_request("sendMessage", data=payload)
+
     async def send_trade_closed_alert(self, trade: TradeInfo, stream_url: str) -> bool:
         """Send a trade closed alert message."""
         text = self.format_trade_closed_message(trade, stream_url)

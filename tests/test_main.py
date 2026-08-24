@@ -2,9 +2,10 @@
 
 import asyncio
 import tempfile
+import time
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import numpy as np
 from pydantic import SecretStr
@@ -632,6 +633,401 @@ class TestTradeMonitoringService(unittest.IsolatedAsyncioTestCase):
         service.notifier.close.assert_awaited_once()
         service.multimodal_verifier.close.assert_awaited_once()
         service.transcriber.close.assert_awaited_once()
+
+    @patch("main.AudioStreamManager")
+    @patch("src.stream_manager.StreamManager.check_live_status", new_callable=AsyncMock)
+    async def test_direct_url_propagated_to_audio_manager(
+        self,
+        mock_check_live: AsyncMock,
+        mock_audio_mgr_class: MagicMock,
+    ) -> None:
+        """monitor_channel passes direct_url from StreamManager to AudioStreamManager."""
+        mock_check_live.return_value = (
+            StreamStatus.LIVE,
+            "https://manifest.googlevideo.com/hls_live/stream.m3u8",
+        )
+        mock_audio_mgr = MagicMock()
+
+        async def empty_audio_chunks(stop_event=None):
+            if False:
+                yield b""
+
+        mock_audio_mgr.stream_audio_chunks = empty_audio_chunks
+        mock_audio_mgr.stop = AsyncMock()
+        mock_audio_mgr_class.return_value = mock_audio_mgr
+
+        channel = self.config.channels[0]
+        channel.url = "https://www.youtube.com/@LiveTrader/live"
+
+        monitor_task = asyncio.create_task(self.service.monitor_channel(channel))
+        for _ in range(25):
+            if mock_audio_mgr_class.call_count:
+                break
+            await asyncio.sleep(0.01)
+
+        self.service.stop()
+        await asyncio.wait_for(monitor_task, timeout=0.5)
+
+        self.assertGreaterEqual(mock_audio_mgr_class.call_count, 1)
+        call_kwargs = mock_audio_mgr_class.call_args.kwargs
+        self.assertEqual(
+            call_kwargs.get("direct_url"),
+            "https://manifest.googlevideo.com/hls_live/stream.m3u8",
+        )
+        self.assertIn("stream_url", call_kwargs)
+
+    @patch(
+        "src.notifier.TelegramNotifier.send_fast_audio_trade_alert",
+        new_callable=AsyncMock,
+    )
+    @patch("src.stream_manager.StreamManager.check_live_status", new_callable=AsyncMock)
+    @patch("src.stream_manager.StreamManager.capture_frame", new_callable=AsyncMock)
+    @patch("src.audio_stream.AudioStreamManager.stream_audio_chunks")
+    @patch(
+        "src.audio_transcriber.AudioTranscriber.transcribe_pcm_chunk",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "src.multimodal_verifier.MultimodalVerifier.verify_multimodal_trade",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "src.stream_manager.StreamManager.broadcast_start_time",
+        new_callable=PropertyMock,
+    )
+    async def test_stable_elapsed_timestamp_across_audio_restarts(
+        self,
+        mock_broadcast_start: MagicMock,
+        mock_multimodal: AsyncMock,
+        mock_transcribe: MagicMock,
+        mock_stream_chunks: MagicMock,
+        mock_capture: AsyncMock,
+        mock_check_live: AsyncMock,
+        mock_send_alert: AsyncMock,
+    ) -> None:
+        """Elapsed stream timestamp must reference the broadcast start time across audio restarts."""
+        fixed_broadcast_start = time.time() - 3600.0  # broadcast started 1 hour ago
+        mock_broadcast_start.return_value = fixed_broadcast_start
+        mock_check_live.return_value = (
+            StreamStatus.LIVE,
+            "https://live.stream/manifest.m3u8",
+        )
+        fake_frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        mock_capture.return_value = fake_frame
+
+        # Session 1 yields chunk and alert, then ends
+        # Session 2 restarts, yields chunk and alert
+        session_counter = 0
+
+        async def multi_session_chunks(stop_event=None):
+            nonlocal session_counter
+            session_counter += 1
+            yield b"\x00\x00" * 80000
+
+        mock_stream_chunks.side_effect = multi_session_chunks
+        mock_transcribe.return_value = "Trade active entered position"
+
+        from src.multimodal_verifier import MultimodalTradeVerification
+
+        mock_multimodal.return_value = MultimodalTradeVerification(
+            is_trade_active=True,
+            direction="BUY",
+            instrument="GOLD",
+            confidence=0.95,
+            reasoning="Active entry",
+        )
+        mock_send_alert.return_value = True
+
+        channel = self.config.channels[0]
+        channel.trigger_keywords = ["trade active"]
+
+        monitor_task = asyncio.create_task(self.service.monitor_channel(channel))
+        for _ in range(50):
+            if mock_send_alert.call_count >= 1:
+                break
+            await asyncio.sleep(0.02)
+
+        self.service.stop()
+        await asyncio.wait_for(monitor_task, timeout=1.0)
+
+        self.assertGreaterEqual(mock_send_alert.call_count, 1)
+        first_alert_kwargs = mock_send_alert.call_args_list[0].kwargs
+        elapsed = first_alert_kwargs.get("elapsed_seconds", 0.0)
+        # Should be ~3600s, not 0s
+        self.assertGreaterEqual(elapsed, 3590.0)
+
+    @patch(
+        "src.notifier.TelegramNotifier.send_fast_audio_trade_alert",
+        new_callable=AsyncMock,
+    )
+    @patch("src.stream_manager.StreamManager.check_live_status", new_callable=AsyncMock)
+    @patch("src.stream_manager.StreamManager.capture_frame", new_callable=AsyncMock)
+    @patch("src.audio_stream.AudioStreamManager.stream_audio_chunks")
+    @patch(
+        "src.audio_transcriber.AudioTranscriber.transcribe_pcm_chunk",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "src.multimodal_verifier.MultimodalVerifier.verify_multimodal_trade",
+        new_callable=AsyncMock,
+    )
+    async def test_audited_entry_phrase_dispatches_trade_alert(
+        self,
+        mock_multimodal: AsyncMock,
+        mock_transcribe: AsyncMock,
+        mock_stream_chunks: MagicMock,
+        mock_capture: AsyncMock,
+        mock_check_live: AsyncMock,
+        mock_send_alert: AsyncMock,
+    ) -> None:
+        """Audited phrase 'You can enter with one lot. I am taking a small scalp.' triggers ENTRY alert."""
+        mock_check_live.return_value = (
+            StreamStatus.LIVE,
+            "https://live.stream/manifest.m3u8",
+        )
+        fake_frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        mock_capture.return_value = fake_frame
+
+        async def fake_audio_generator(stop_event=None):
+            yield b"\x00\x00" * 80000
+
+        mock_stream_chunks.side_effect = fake_audio_generator
+        mock_transcribe.return_value = "You can enter with one lot. I am taking a small scalp."
+
+        from src.multimodal_verifier import MultimodalTradeVerification
+        mock_multimodal.return_value = MultimodalTradeVerification(
+            signal_type="ENTRY",
+            is_trade_active=True,
+            direction="BUY",
+            instrument="GOLD",
+            entry_price="2650.50",
+            trigger_quote="You can enter with one lot. I am taking a small scalp.",
+            confidence=0.95,
+            reasoning="Trader confirmed live scalp entry",
+        )
+        mock_send_alert.return_value = True
+
+        channel = self.config.channels[0]
+        channel.trigger_keywords = ["enter", "scalp"]
+
+        monitor_task = asyncio.create_task(self.service.monitor_channel(channel))
+        for _ in range(50):
+            if mock_send_alert.call_count >= 1:
+                break
+            await asyncio.sleep(0.02)
+
+        self.service.stop()
+        await asyncio.wait_for(monitor_task, timeout=1.0)
+
+        self.assertEqual(mock_send_alert.call_count, 1)
+        call_kwargs = mock_send_alert.call_args.kwargs
+        self.assertEqual(call_kwargs["channel_name"], channel.name)
+        self.assertEqual(call_kwargs["verification"].signal_type, "ENTRY")
+
+    @patch(
+        "src.notifier.TelegramNotifier.send_management_alert",
+        new_callable=AsyncMock,
+    )
+    @patch("src.stream_manager.StreamManager.check_live_status", new_callable=AsyncMock)
+    @patch("src.stream_manager.StreamManager.capture_frame", new_callable=AsyncMock)
+    @patch("src.audio_stream.AudioStreamManager.stream_audio_chunks")
+    @patch(
+        "src.audio_transcriber.AudioTranscriber.transcribe_pcm_chunk",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "src.multimodal_verifier.MultimodalVerifier.verify_multimodal_trade",
+        new_callable=AsyncMock,
+    )
+    async def test_audited_management_phrase_dispatches_management_alert(
+        self,
+        mock_multimodal: AsyncMock,
+        mock_transcribe: AsyncMock,
+        mock_stream_chunks: MagicMock,
+        mock_capture: AsyncMock,
+        mock_check_live: AsyncMock,
+        mock_send_mgmt_alert: AsyncMock,
+    ) -> None:
+        """Audited phrase 'Book some profit and move SL to CTC.' triggers MANAGEMENT alert."""
+        mock_check_live.return_value = (
+            StreamStatus.LIVE,
+            "https://live.stream/manifest.m3u8",
+        )
+        fake_frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        mock_capture.return_value = fake_frame
+
+        async def fake_audio_generator(stop_event=None):
+            yield b"\x00\x00" * 80000
+
+        mock_stream_chunks.side_effect = fake_audio_generator
+        mock_transcribe.return_value = "Book some profit and move SL to CTC."
+
+        from src.multimodal_verifier import MultimodalTradeVerification
+        mock_multimodal.return_value = MultimodalTradeVerification(
+            signal_type="PARTIAL_EXIT",
+            is_trade_active=True,
+            direction="BUY",
+            instrument="GOLD",
+            stop_loss="CTC",
+            trigger_quote="Book some profit and move SL to CTC.",
+            confidence=0.92,
+            reasoning="Partial booking and stop moved to breakeven",
+        )
+        mock_send_mgmt_alert.return_value = True
+
+        channel = self.config.channels[0]
+        channel.trigger_keywords = ["book profit", "sl to ctc", "ctc"]
+
+        monitor_task = asyncio.create_task(self.service.monitor_channel(channel))
+        for _ in range(50):
+            if mock_send_mgmt_alert.call_count >= 1:
+                break
+            await asyncio.sleep(0.02)
+
+        self.service.stop()
+        await asyncio.wait_for(monitor_task, timeout=1.0)
+
+        self.assertEqual(mock_send_mgmt_alert.call_count, 1)
+        call_kwargs = mock_send_mgmt_alert.call_args.kwargs
+        self.assertEqual(call_kwargs["channel_name"], channel.name)
+        self.assertEqual(call_kwargs["verification"].signal_type, "PARTIAL_EXIT")
+
+    @patch(
+        "src.notifier.TelegramNotifier.send_management_alert",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "src.notifier.TelegramNotifier.send_trade_closed_alert",
+        new_callable=AsyncMock,
+    )
+    @patch("src.stream_manager.StreamManager.check_live_status", new_callable=AsyncMock)
+    @patch("src.stream_manager.StreamManager.capture_frame", new_callable=AsyncMock)
+    @patch("src.audio_stream.AudioStreamManager.stream_audio_chunks")
+    @patch(
+        "src.audio_transcriber.AudioTranscriber.transcribe_pcm_chunk",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "src.multimodal_verifier.MultimodalVerifier.verify_multimodal_trade",
+        new_callable=AsyncMock,
+    )
+    async def test_audited_exit_phrase_dispatches_exit_alert(
+        self,
+        mock_multimodal: AsyncMock,
+        mock_transcribe: AsyncMock,
+        mock_stream_chunks: MagicMock,
+        mock_capture: AsyncMock,
+        mock_check_live: AsyncMock,
+        mock_send_closed_alert: AsyncMock,
+        mock_send_mgmt_alert: AsyncMock,
+    ) -> None:
+        """Audited phrase 'My remaining trade is closed/cut.' triggers immediate exit alert."""
+        mock_check_live.return_value = (
+            StreamStatus.LIVE,
+            "https://live.stream/manifest.m3u8",
+        )
+        fake_frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        mock_capture.return_value = fake_frame
+
+        async def fake_audio_generator(stop_event=None):
+            yield b"\x00\x00" * 80000
+
+        mock_stream_chunks.side_effect = fake_audio_generator
+        mock_transcribe.return_value = "My remaining trade is closed/cut."
+
+        from src.multimodal_verifier import MultimodalTradeVerification
+        mock_multimodal.return_value = MultimodalTradeVerification(
+            signal_type="EXIT",
+            is_trade_active=False,
+            direction="BUY",
+            instrument="GOLD",
+            trigger_quote="My remaining trade is closed/cut.",
+            confidence=0.94,
+            reasoning="Explicit position exit confirmed",
+        )
+        mock_send_mgmt_alert.return_value = True
+        mock_send_closed_alert.return_value = True
+
+        channel = self.config.channels[0]
+        channel.trigger_keywords = ["closed", "cut", "close"]
+
+        monitor_task = asyncio.create_task(self.service.monitor_channel(channel))
+        for _ in range(50):
+            if mock_send_mgmt_alert.call_count >= 1 or mock_send_closed_alert.call_count >= 1:
+                break
+            await asyncio.sleep(0.02)
+
+        self.service.stop()
+        await asyncio.wait_for(monitor_task, timeout=1.0)
+
+        total_exit_alerts = mock_send_mgmt_alert.call_count + mock_send_closed_alert.call_count
+        self.assertEqual(total_exit_alerts, 1)
+
+    @patch(
+        "src.notifier.TelegramNotifier.send_fast_audio_trade_alert",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "src.notifier.TelegramNotifier.send_management_alert",
+        new_callable=AsyncMock,
+    )
+    @patch("src.stream_manager.StreamManager.check_live_status", new_callable=AsyncMock)
+    @patch("src.stream_manager.StreamManager.capture_frame", new_callable=AsyncMock)
+    @patch("src.audio_stream.AudioStreamManager.stream_audio_chunks")
+    @patch(
+        "src.audio_transcriber.AudioTranscriber.transcribe_pcm_chunk",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "src.multimodal_verifier.MultimodalVerifier.verify_multimodal_trade",
+        new_callable=AsyncMock,
+    )
+    async def test_negative_conditional_37_level_rejected_fail_closed(
+        self,
+        mock_multimodal: AsyncMock,
+        mock_transcribe: AsyncMock,
+        mock_stream_chunks: MagicMock,
+        mock_capture: AsyncMock,
+        mock_check_live: AsyncMock,
+        mock_send_mgmt_alert: AsyncMock,
+        mock_send_trade_alert: AsyncMock,
+    ) -> None:
+        """Conditional/viewer discussion around level 37 is rejected by Gemini and sends no alerts."""
+        mock_check_live.return_value = (
+            StreamStatus.LIVE,
+            "https://live.stream/manifest.m3u8",
+        )
+        fake_frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        mock_capture.return_value = fake_frame
+
+        async def fake_audio_generator(stop_event=None):
+            yield b"\x00\x00" * 80000
+
+        mock_stream_chunks.side_effect = fake_audio_generator
+        mock_transcribe.return_value = "If 37 level breaks we can enter call."
+
+        from src.multimodal_verifier import MultimodalTradeVerification
+        mock_multimodal.return_value = MultimodalTradeVerification(
+            signal_type="NONE",
+            is_trade_active=False,
+            direction="NONE",
+            confidence=0.0,
+            reasoning="Hypothetical conditional discussion, no live order",
+        )
+
+        channel = self.config.channels[0]
+        channel.trigger_keywords = ["enter"]
+
+        monitor_task = asyncio.create_task(self.service.monitor_channel(channel))
+        for _ in range(25):
+            await asyncio.sleep(0.02)
+
+        self.service.stop()
+        await asyncio.wait_for(monitor_task, timeout=1.0)
+
+        mock_send_trade_alert.assert_not_called()
+        mock_send_mgmt_alert.assert_not_called()
+
 
 
 class TestCLITestModeValidation(unittest.TestCase):

@@ -82,6 +82,41 @@ class CaptureConfig(BaseModel):
     max_consecutive_stream_errors: int = Field(
         default=5, ge=1, description="Threshold before resetting stream capture"
     )
+    restart_initial_delay_seconds: float = Field(
+        default=1.0,
+        gt=0.0,
+        description="Initial retry delay in seconds for exponential restart backoff",
+    )
+    restart_max_delay_seconds: float = Field(
+        default=30.0,
+        gt=0.0,
+        description="Maximum retry delay in seconds for exponential restart backoff",
+    )
+    restart_backoff_factor: float = Field(
+        default=2.0,
+        ge=1.0,
+        description="Multiplier for exponential restart backoff",
+    )
+    restart_reset_window_seconds: float = Field(
+        default=300.0,
+        gt=0.0,
+        description="Sustained healthy capture duration in seconds before resetting backoff",
+    )
+    restart_jitter_ratio: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Bounded random jitter ratio for restart delays (0.0 in unit tests)",
+    )
+
+    @model_validator(mode="after")
+    def check_restart_delay_bounds(self) -> "CaptureConfig":
+        if self.restart_max_delay_seconds < self.restart_initial_delay_seconds:
+            raise ValueError(
+                "restart_max_delay_seconds must be greater than or equal to "
+                "restart_initial_delay_seconds"
+            )
+        return self
 
 
 class ROICropConfig(BaseModel):
@@ -229,7 +264,7 @@ class AudioSTTConfig(BaseModel):
         description="Language code hint (unused with /translations endpoint; kept for backward compatibility)",
     )
     initial_prompt: str = Field(
-        default="Trade active. Entry taken. Buy executed. Sell executed. Short position. Long position. Stop loss. Target hit. Order placed. Gold, XAUUSD, BTC, Bitcoin, Forex.",
+        default="Trade active. Entry taken. Buy executed. Sell executed. Short position. Long position. Stop loss. Target hit. Order placed. Scalp. Scalping. Book profit. Move SL to CTC. Trade closed. Gold, XAUUSD, BTC, Bitcoin, Forex.",
         description="Initial vocabulary prompt to bias Whisper translation toward English trading terms and tickers",
     )
     temperature: float = Field(

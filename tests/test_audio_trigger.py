@@ -130,3 +130,63 @@ def test_audio_trigger_detector_cooldown_and_update():
     assert detector.check_trigger("Breakout confirmed")[0] is True
     detector.reset_cooldown()
     assert detector.check_trigger("Taking entry now")[0] is False
+
+
+def test_audio_trigger_cooldown_suppresses_synonyms_but_not_different_actions():
+    detector = AudioTriggerDetector(
+        trigger_keywords=["book profit", "partial booking", "move sl", "closed"],
+        cooldown_seconds=30.0,
+    )
+
+    assert detector.check_trigger("Book profit now") == (True, "book profit")
+    assert detector.check_trigger("Partial booking is done") == (False, None)
+    assert detector.check_trigger("Move SL to cost") == (True, "move sl")
+    assert detector.check_trigger("The remaining trade is closed") == (True, "closed")
+
+
+def test_audio_trigger_detector_audited_phrases():
+    """Audited phrases from August 24 broadcast must trigger default fallback keywords."""
+    detector = AudioTriggerDetector(cooldown_seconds=1.0)
+
+    # 1. Audited entry phrase: "You can enter with one lot. I am taking a small scalp."
+    trig, kw = detector.check_trigger("You can enter with one lot. I am taking a small scalp.")
+    assert trig is True
+    assert kw in ("enter", "scalp", "taking a scalp")
+
+    # 2. Audited management phrase: "Book some profit and move SL to CTC."
+    detector.reset_cooldown()
+    trig, kw = detector.check_trigger("Book some profit and move SL to CTC.")
+    assert trig is True
+    assert kw in ("book profit", "book some profit", "sl to ctc", "ctc", "move sl")
+
+    # 3. Audited exit phrase: "My remaining trade is closed/cut."
+    detector.reset_cooldown()
+    trig, kw = detector.check_trigger("My remaining trade is closed.")
+    assert trig is True
+    assert kw in ("closed", "close", "trade closed", "trade is closed")
+
+    detector.reset_cooldown()
+    trig, kw = detector.check_trigger("My remaining trade is cut.")
+    assert trig is True
+    assert kw in ("cut", "trade cut")
+
+
+def test_audio_trigger_detector_position_management_keywords():
+    """Verify various position-management phrases trigger detection."""
+    detector = AudioTriggerDetector(cooldown_seconds=1.0)
+
+    management_phrases = [
+        ("Booked partial quantity at first target", ["booked partial", "partial book", "partial booking"]),
+        ("Cost-to-cost stop loss shifted", ["cost-to-cost", "cost to cost", "sl shifted", "shifted sl"]),
+        ("Move stop to breakeven now", ["move stop", "breakeven"]),
+        ("Trailing sl to 24500", ["trailing sl", "trail sl"]),
+        ("Target hit for 1:2 risk reward", ["target hit"]),
+        ("SL hit on the spike", ["sl hit"]),
+        ("Exited the position completely", ["exited", "exit", "position"]),
+    ]
+
+    for phrase, expected_keywords in management_phrases:
+        detector.reset_cooldown()
+        trig, kw = detector.check_trigger(phrase)
+        assert trig is True, f"Failed to trigger on '{phrase}'"
+        assert kw is not None

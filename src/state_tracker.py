@@ -20,6 +20,7 @@ class StateTransition(str, Enum):
     NONE = "NONE"
     NEW_TRADE = "NEW_TRADE"
     STILL_ACTIVE = "STILL_ACTIVE"
+    MANAGEMENT_UPDATE = "MANAGEMENT_UPDATE"
     TRADE_CLOSED = "TRADE_CLOSED"
 
 
@@ -65,19 +66,27 @@ class ChannelStateRecord:
         self.state: TradeState = TradeState.IDLE
         self.current_trade: TradeInfo | None = None
         self.consecutive_misses: int = 0
+        self.last_management_actions: dict[str, float] = {}
 
 
 class TradeStateTracker:
     """Manages trade lifecycle state transitions across monitored channels."""
 
-    def __init__(self, miss_threshold: int = 2) -> None:
+    def __init__(
+        self,
+        miss_threshold: int = 2,
+        management_cooldown_seconds: float = 45.0,
+    ) -> None:
         """Initialize the state tracker.
 
         Args:
             miss_threshold: Number of consecutive frames without trade detection
                             before transitioning an active trade to CLOSED.
+            management_cooldown_seconds: Minimum seconds before repeating the same
+                                         management action notification on a channel.
         """
         self.miss_threshold = max(1, miss_threshold)
+        self.management_cooldown_seconds = max(0.0, float(management_cooldown_seconds))
         self._channels: dict[str, ChannelStateRecord] = {}
 
     def _get_or_create_channel(self, channel_name: str) -> ChannelStateRecord:
@@ -96,11 +105,12 @@ class TradeStateTracker:
         return record.current_trade if record.state == TradeState.ACTIVE_TRADE else None
 
     def reset_channel(self, channel_name: str) -> None:
-        """Reset channel state back to IDLE."""
+        """Reset channel state back to IDLE and clear management history."""
         record = self._get_or_create_channel(channel_name)
         record.state = TradeState.IDLE
         record.current_trade = None
         record.consecutive_misses = 0
+        record.last_management_actions.clear()
 
     def process_verification(
         self,
@@ -120,7 +130,9 @@ class TradeStateTracker:
         """
         record = self._get_or_create_channel(channel_name)
         now_utc = datetime.now(timezone.utc)
+        now_ts = now_utc.timestamp()
 
+        raw_signal_type = getattr(verification, "signal_type", None)
         is_active = getattr(verification, "is_trade_active", False)
         direction = getattr(verification, "direction", "NONE")
         instrument = getattr(verification, "instrument", "UNKNOWN")
@@ -132,13 +144,21 @@ class TradeStateTracker:
         confidence = float(getattr(verification, "confidence", 0.0))
         reasoning = getattr(verification, "reasoning", "")
 
-        if is_active:
-            # Trade is detected
+        # Determine normalized signal type
+        if raw_signal_type:
+            signal_type = str(raw_signal_type).upper().strip()
+        elif is_active:
+            signal_type = "ENTRY"
+        else:
+            signal_type = "NONE"
+
+        if signal_type == "ENTRY":
             record.consecutive_misses = 0
 
             if record.state == TradeState.IDLE:
                 # Transition: IDLE -> ACTIVE_TRADE (NEW_TRADE)
                 record.state = TradeState.ACTIVE_TRADE
+                record.last_management_actions.clear()
                 trade = TradeInfo(
                     channel_name=channel_name,
                     direction=direction,
@@ -155,7 +175,7 @@ class TradeStateTracker:
                 return StateTransition.NEW_TRADE, trade
 
             else:
-                # State: Already ACTIVE_TRADE (STILL_ACTIVE)
+                # State: Already ACTIVE_TRADE (STILL_ACTIVE - duplicate suppressed)
                 if record.current_trade is not None:
                     record.current_trade.last_seen_at = now_utc
                     if entry_details:
@@ -169,13 +189,97 @@ class TradeStateTracker:
 
                 return StateTransition.STILL_ACTIVE, record.current_trade
 
+        elif signal_type in ("PARTIAL_EXIT", "MOVE_STOP"):
+            record.consecutive_misses = 0
+            last_action_time = record.last_management_actions.get(signal_type, 0.0)
+            in_cooldown = (now_ts - last_action_time) < self.management_cooldown_seconds
+
+            if record.state == TradeState.ACTIVE_TRADE:
+                # Active trade exists: preserve position and emit management transition
+                if record.current_trade is not None:
+                    record.current_trade.last_seen_at = now_utc
+                    if direction != "NONE":
+                        record.current_trade.direction = direction
+                    if instrument and instrument != "UNKNOWN":
+                        record.current_trade.instrument = instrument
+                    if frame_bytes is not None:
+                        record.current_trade.last_frame_bytes = frame_bytes
+
+                if in_cooldown:
+                    return StateTransition.STILL_ACTIVE, record.current_trade
+
+                record.last_management_actions[signal_type] = now_ts
+                return StateTransition.MANAGEMENT_UPDATE, record.current_trade
+
+            else:
+                # Earlier entry missed: alert management without fabricating an active position
+                if in_cooldown:
+                    return StateTransition.NONE, None
+
+                record.last_management_actions[signal_type] = now_ts
+                ephemeral_trade = TradeInfo(
+                    channel_name=channel_name,
+                    direction=direction,
+                    instrument=instrument or "UNKNOWN",
+                    entry_or_pnl=entry_details,
+                    confidence=confidence,
+                    reasoning=reasoning,
+                    opened_at=now_utc,
+                    last_seen_at=now_utc,
+                    closed_at=None,
+                    last_frame_bytes=frame_bytes,
+                )
+                return StateTransition.MANAGEMENT_UPDATE, ephemeral_trade
+
+        elif signal_type == "EXIT":
+            # Explicit exit closes an active trade immediately without waiting for miss-threshold frames
+            last_exit_time = record.last_management_actions.get("EXIT", 0.0)
+            in_cooldown = (now_ts - last_exit_time) < self.management_cooldown_seconds
+
+            if record.state == TradeState.ACTIVE_TRADE:
+                closed_trade = record.current_trade
+                if closed_trade is not None:
+                    closed_trade.closed_at = now_utc
+                    if direction != "NONE":
+                        closed_trade.direction = direction
+                    if instrument and instrument != "UNKNOWN":
+                        closed_trade.instrument = instrument
+                    if frame_bytes is not None:
+                        closed_trade.last_frame_bytes = frame_bytes
+
+                record.state = TradeState.IDLE
+                record.current_trade = None
+                record.consecutive_misses = 0
+                record.last_management_actions["EXIT"] = now_ts
+                return StateTransition.TRADE_CLOSED, closed_trade
+
+            else:
+                # Channel was IDLE (missed entry earlier)
+                if in_cooldown:
+                    return StateTransition.NONE, None
+
+                record.last_management_actions["EXIT"] = now_ts
+                ephemeral_closed = TradeInfo(
+                    channel_name=channel_name,
+                    direction=direction,
+                    instrument=instrument or "UNKNOWN",
+                    entry_or_pnl=entry_details,
+                    confidence=confidence,
+                    reasoning=reasoning,
+                    opened_at=now_utc,
+                    last_seen_at=now_utc,
+                    closed_at=now_utc,
+                    last_frame_bytes=frame_bytes,
+                )
+                return StateTransition.TRADE_CLOSED, ephemeral_closed
+
         else:
-            # Trade is NOT detected in the current frame
+            # Trade is NOT detected / signal is NONE
             if record.state == TradeState.ACTIVE_TRADE:
                 record.consecutive_misses += 1
 
                 if record.consecutive_misses >= self.miss_threshold:
-                    # Transition: ACTIVE_TRADE -> IDLE (TRADE_CLOSED)
+                    # Transition: ACTIVE_TRADE -> IDLE (TRADE_CLOSED after miss threshold)
                     closed_trade = record.current_trade
                     if closed_trade is not None:
                         closed_trade.closed_at = now_utc
@@ -183,6 +287,7 @@ class TradeStateTracker:
                     record.state = TradeState.IDLE
                     record.current_trade = None
                     record.consecutive_misses = 0
+                    record.last_management_actions.clear()
 
                     return StateTransition.TRADE_CLOSED, closed_trade
                 else:

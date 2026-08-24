@@ -40,3 +40,36 @@ def test_format_fast_audio_trade_message():
     assert "Haan entry bana lo yahan pe call mein" in msg
     assert "t=1h1m5s" in msg
     assert "Conf: 95%" in msg
+
+
+def test_format_management_alert_message():
+    notifier = TelegramNotifier(
+        bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+        chat_id="987654321",
+        config=TelegramConfig(),
+    )
+
+    verification = MultimodalTradeVerification(
+        signal_type="MOVE_STOP",
+        direction="BUY",
+        instrument="GOLD",
+        stop_loss="CTC",
+        trigger_quote="Book some profit and move SL to CTC.",
+        confidence=0.91,
+        reasoning="Stop loss moved to breakeven",
+    )
+
+    msg = notifier.format_management_alert_message(
+        channel_name="Mehak Trades",
+        verification=verification,
+        stream_url="https://youtube.com/watch?v=sample123",
+        elapsed_seconds=185,  # 3m 5s
+    )
+
+    assert "TRADE MANAGEMENT: Mehak Trades" in msg
+    assert "STOP MOVED / TRAILING (CTC)" in msg
+    assert "GOLD" in msg
+    assert "SL: CTC" in msg
+    assert "Book some profit and move SL to CTC." in msg
+    assert "t=3m5s" in msg
+    assert "Conf: 91%" in msg

@@ -16,8 +16,12 @@ channels:
   trigger_keywords:
   - active
   - activated
-  - entry
+  - enter
   - entered
+  - entry
+  - entry taken
+  - scalp
+  - scalping
   - bought
   - buy
   - sold
@@ -27,6 +31,34 @@ channels:
   - position
   - executed
   - order placed
+  - book profit
+  - booked profit
+  - booking profit
+  - book some profit
+  - book partial
+  - partial book
+  - partial booking
+  - partial profit
+  - ctc
+  - cost to cost
+  - cost-to-cost
+  - breakeven
+  - break even
+  - move sl
+  - sl to ctc
+  - move stop
+  - trailing sl
+  - trail sl
+  - trail stop
+  - target hit
+  - sl hit
+  - stop hit
+  - stop loss hit
+  - close
+  - closed
+  - exit
+  - exited
+  - cut
   trader_profile: Mehak Trades is an SMC and price action Forex and Gold trader broadcasting live commentary in Hindi/Hinglish. She focuses on XAUUSD, Gold, Forex, Bitcoin, Order Blocks, Fair Value Gaps (FVG), liquidity sweeps, and trade setups.
 - name: Naresh Cool Trader
   url: https://www.youtube.com/@NareshCoolTrader/live
@@ -35,8 +67,12 @@ channels:
   trigger_keywords:
   - active
   - activated
-  - entry
+  - enter
   - entered
+  - entry
+  - entry taken
+  - scalp
+  - scalping
   - bought
   - buy
   - sold
@@ -48,8 +84,35 @@ channels:
   - order placed
   - call option
   - put option
-  - scalping
   - breakout
+  - book profit
+  - booked profit
+  - booking profit
+  - book some profit
+  - book partial
+  - partial book
+  - partial booking
+  - partial profit
+  - ctc
+  - cost to cost
+  - cost-to-cost
+  - breakeven
+  - break even
+  - move sl
+  - sl to ctc
+  - move stop
+  - trailing sl
+  - trail sl
+  - trail stop
+  - target hit
+  - sl hit
+  - stop hit
+  - stop loss hit
+  - close
+  - closed
+  - exit
+  - exited
+  - cut
   trader_profile: >
     Naresh Cool Trader is an Indian stock market index options and scalping trader broadcasting
     live commentary in Hindi. He focuses on NIFTY, BANKNIFTY, FINNIFTY, Option Buying (CE/PE),
@@ -58,7 +121,7 @@ audio:
   model: whisper-large-v3
   chunk_duration_seconds: 10.0
   context_buffer_seconds: 120
-  initial_prompt: "Trade active. Entry taken. Buy executed. Sell executed. Short position. Long position. Stop loss. Target hit. Order placed. Gold, XAUUSD, BTC, Bitcoin, Forex."
+  initial_prompt: "Trade active. Entry taken. Buy executed. Sell executed. Short position. Long position. Stop loss. Target hit. Order placed. Scalp. Scalping. Book profit. Move SL to CTC. Trade closed. Gold, XAUUSD, BTC, Bitcoin, Forex."
   temperature: 0.0
   timeout_seconds: 10.0
   max_retries: 3
@@ -68,6 +131,11 @@ capture:
   live_poll_interval_seconds: 60.0
   stream_timeout_seconds: 15.0
   max_consecutive_stream_errors: 5
+  restart_initial_delay_seconds: 1.0
+  restart_max_delay_seconds: 30.0
+  restart_backoff_factor: 2.0
+  restart_reset_window_seconds: 300.0
+  restart_jitter_ratio: 0.0
 cv_filter:
   min_line_length_ratio: 0.1
   max_line_angle_degrees: 5.0

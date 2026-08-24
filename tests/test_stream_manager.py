@@ -1,5 +1,5 @@
-"""Unit tests for YouTube stream manager and live status resolution."""
-
+import asyncio
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -249,6 +249,124 @@ class TestStreamManager(unittest.IsolatedAsyncioTestCase):
 
         await self.manager.close()
         self.assertIsNone(self.manager.broadcast_id)
+
+    @patch("yt_dlp.YoutubeDL")
+    async def test_broadcast_start_time_extracted_from_release_timestamp(
+        self, mock_ydl_class: MagicMock
+    ) -> None:
+        """StreamManager extracts validated release_timestamp, preserves it on UNKNOWN, and clears on OFFLINE/close."""
+        mock_ydl = MagicMock()
+        mock_ydl_class.return_value.__enter__.return_value = mock_ydl
+
+        test_now = time.time()
+        start_ts = test_now - 1200.0  # broadcast started 20 minutes ago
+
+        # 1. LIVE with release_timestamp
+        mock_ydl.extract_info.return_value = {
+            "id": "video_broadcast_1",
+            "is_live": True,
+            "release_timestamp": start_ts,
+            "url": "https://manifest.googlevideo.com/live.m3u8",
+        }
+        status, _ = await self.manager.check_live_status()
+        self.assertEqual(status, StreamStatus.LIVE)
+        self.assertEqual(self.manager.broadcast_start_time, start_ts)
+
+        # 2. Transient UNKNOWN preserves broadcast_start_time
+        mock_ydl.extract_info.side_effect = yt_dlp.utils.DownloadError("503")
+        status2, _ = await self.manager.check_live_status()
+        self.assertEqual(status2, StreamStatus.UNKNOWN)
+        self.assertEqual(self.manager.broadcast_start_time, start_ts)
+
+        # 3. OFFLINE clears broadcast_start_time
+        mock_ydl.extract_info.side_effect = yt_dlp.utils.DownloadError("Channel is not live")
+        status3, _ = await self.manager.check_live_status()
+        self.assertEqual(status3, StreamStatus.OFFLINE)
+        self.assertIsNone(self.manager.broadcast_start_time)
+
+    @patch("yt_dlp.YoutubeDL")
+    async def test_broadcast_start_time_fallback_to_first_live_detection(
+        self, mock_ydl_class: MagicMock
+    ) -> None:
+        """When release_timestamp is absent, broadcast_start_time anchors to first live detection."""
+        mock_ydl = MagicMock()
+        mock_ydl_class.return_value.__enter__.return_value = mock_ydl
+
+        mock_ydl.extract_info.return_value = {
+            "id": "video_broadcast_2",
+            "is_live": True,
+            "url": "https://manifest.googlevideo.com/live.m3u8",
+        }
+        before = time.time()
+        status, _ = await self.manager.check_live_status()
+        after = time.time()
+
+        self.assertEqual(status, StreamStatus.LIVE)
+        first_time = self.manager.broadcast_start_time
+        self.assertIsNotNone(first_time)
+        self.assertTrue(before <= first_time <= after)
+
+        # Subsequent check while still live preserves the exact initial timestamp
+        await asyncio.sleep(0.01)
+        mock_ydl.extract_info.return_value = {
+            "id": "video_broadcast_2",
+            "is_live": True,
+            "url": "https://manifest.googlevideo.com/live.m3u8",
+        }
+        await self.manager.check_live_status()
+        self.assertEqual(self.manager.broadcast_start_time, first_time)
+
+        await self.manager.close()
+        self.assertIsNone(self.manager.broadcast_start_time)
+
+    @patch("yt_dlp.YoutubeDL")
+    async def test_new_broadcast_id_resets_fallback_start_clock(
+        self, mock_ydl_class: MagicMock
+    ) -> None:
+        mock_ydl = MagicMock()
+        mock_ydl_class.return_value.__enter__.return_value = mock_ydl
+        mock_ydl.extract_info.return_value = {
+            "id": "broadcast-one",
+            "is_live": True,
+            "url": "https://manifest.googlevideo.com/live-one.m3u8",
+        }
+        await self.manager.check_live_status()
+        first_start = self.manager.broadcast_start_time
+
+        await asyncio.sleep(0.01)
+        mock_ydl.extract_info.return_value = {
+            "id": "broadcast-two",
+            "is_live": True,
+            "url": "https://manifest.googlevideo.com/live-two.m3u8",
+        }
+        await self.manager.check_live_status()
+
+        self.assertGreater(self.manager.broadcast_start_time, first_start)
+
+    @patch("yt_dlp.YoutubeDL")
+    async def test_changed_resolved_url_releases_stale_video_capture(
+        self, mock_ydl_class: MagicMock
+    ) -> None:
+        mock_ydl = MagicMock()
+        mock_ydl_class.return_value.__enter__.return_value = mock_ydl
+        mock_ydl.extract_info.return_value = {
+            "id": "same-broadcast",
+            "is_live": True,
+            "url": "https://manifest.googlevideo.com/live-one.m3u8",
+        }
+        await self.manager.check_live_status()
+        old_capture = MagicMock()
+        self.manager._cap = old_capture
+
+        mock_ydl.extract_info.return_value = {
+            "id": "same-broadcast",
+            "is_live": True,
+            "url": "https://manifest.googlevideo.com/live-two.m3u8",
+        }
+        await self.manager.check_live_status()
+
+        old_capture.release.assert_called_once()
+        self.assertIsNone(self.manager._cap)
 
     @patch("yt_dlp.YoutubeDL")
     async def test_live_stream_without_broadcast_id_sets_none(

@@ -12,7 +12,7 @@ import time
 
 import cv2
 
-from src.audio_stream import AudioStreamManager
+from src.audio_stream import AudioStreamManager, RestartBackoffTracker
 from src.audio_transcriber import AudioTranscriber
 from src.audio_trigger import AudioTriggerDetector, RollingTranscriptBuffer
 from src.config import (
@@ -97,6 +97,13 @@ class TradeMonitoringService:
             trigger_keywords=channel.trigger_keywords,
             cooldown_seconds=20.0,
         )
+        backoff_tracker = RestartBackoffTracker(
+            initial_delay_seconds=self.config.capture.restart_initial_delay_seconds,
+            max_delay_seconds=self.config.capture.restart_max_delay_seconds,
+            backoff_factor=self.config.capture.restart_backoff_factor,
+            reset_window_seconds=self.config.capture.restart_reset_window_seconds,
+            jitter_ratio=self.config.capture.restart_jitter_ratio,
+        )
         stream_url: str | None = None
 
         try:
@@ -168,6 +175,7 @@ class TradeMonitoringService:
 
                 audio_mgr = AudioStreamManager(
                     stream_url=audio_input_url,
+                    direct_url=direct_url,
                     chunk_duration_seconds=chunk_duration,
                 )
                 self._audio_stream_managers.append(audio_mgr)
@@ -254,8 +262,15 @@ class TradeMonitoringService:
                                     trader_profile=channel.trader_profile or "",
                                 )
 
+                                signal_type = getattr(
+                                    verification,
+                                    "signal_type",
+                                    "ENTRY" if verification.is_trade_active else "NONE",
+                                )
+
                                 ch_logger.info(
-                                    f"Gemini Multimodal Result: is_active={verification.is_trade_active}, "
+                                    f"Gemini Multimodal Result: signal={signal_type}, "
+                                    f"is_active={verification.is_trade_active}, "
                                     f"dir={verification.direction}, inst={verification.instrument}, "
                                     f"conf={verification.confidence:.2f}"
                                 )
@@ -268,16 +283,21 @@ class TradeMonitoringService:
                                     )
                                 )
 
-                                if verification.is_trade_active:
+                                broadcast_ref = (
+                                    stream_mgr.broadcast_start_time
+                                    or stream_start_time
+                                )
+                                elapsed_stream_sec = max(
+                                    0.0, time.time() - broadcast_ref
+                                )
+
+                                if signal_type == "ENTRY":
                                     if (
                                         transition == StateTransition.NEW_TRADE
                                         and trade
                                     ):
                                         ch_logger.info(
-                                            f"DISPATCHING ALERT: {trade.direction} on {trade.instrument}"
-                                        )
-                                        elapsed_stream_sec = max(
-                                            0.0, time.time() - stream_start_time
+                                            f"DISPATCHING ENTRY ALERT: {trade.direction} on {trade.instrument}"
                                         )
                                         alert_sent = await self.notifier.send_fast_audio_trade_alert(
                                             channel_name=channel.name,
@@ -291,15 +311,60 @@ class TradeMonitoringService:
                                         )
                                         if not alert_sent:
                                             ch_logger.error(
-                                                "Trade was detected, but its Telegram alert could not be delivered."
+                                                "Trade entry was detected, but its Telegram alert could not be delivered."
                                             )
                                     elif transition == StateTransition.STILL_ACTIVE:
                                         ch_logger.debug(
-                                            "Trade already active. Suppressing duplicate alert."
+                                            "Trade already active. Suppressing duplicate entry alert."
                                         )
+
+                                elif signal_type in ("PARTIAL_EXIT", "MOVE_STOP"):
+                                    if transition == StateTransition.MANAGEMENT_UPDATE:
+                                        ch_logger.info(
+                                            f"DISPATCHING MANAGEMENT ALERT ({signal_type}) for {channel.name}"
+                                        )
+                                        alert_sent = await self.notifier.send_management_alert(
+                                            channel_name=channel.name,
+                                            verification=verification,
+                                            stream_url=channel.url,
+                                            frame_bytes=frame_jpeg_bytes,
+                                            elapsed_seconds=elapsed_stream_sec,
+                                        )
+                                        self.session_logger.record_management(
+                                            session_rec.session_id, alerted=alert_sent
+                                        )
+                                        if not alert_sent:
+                                            ch_logger.error(
+                                                f"Management signal ({signal_type}) was detected, but its Telegram alert could not be delivered."
+                                            )
+                                    elif transition == StateTransition.STILL_ACTIVE:
+                                        ch_logger.debug(
+                                            f"Management action ({signal_type}) already reported recently. Suppressing duplicate."
+                                        )
+
+                                elif signal_type == "EXIT":
+                                    if transition == StateTransition.TRADE_CLOSED:
+                                        ch_logger.info(
+                                            f"DISPATCHING TRADE CLOSED / EXIT ALERT for {channel.name}"
+                                        )
+                                        alert_sent = await self.notifier.send_management_alert(
+                                            channel_name=channel.name,
+                                            verification=verification,
+                                            stream_url=channel.url,
+                                            frame_bytes=frame_jpeg_bytes,
+                                            elapsed_seconds=elapsed_stream_sec,
+                                        )
+                                        self.session_logger.record_management(
+                                            session_rec.session_id, alerted=alert_sent
+                                        )
+                                        if not alert_sent:
+                                            ch_logger.error(
+                                                "Trade exit alert could not be delivered."
+                                            )
+
                                 else:
                                     ch_logger.info(
-                                        f"Gemini rejected trade execution: {verification.reasoning}"
+                                        f"Gemini rejected trade signal ({signal_type}): {verification.reasoning}"
                                     )
                                     if (
                                         transition == StateTransition.TRADE_CLOSED
@@ -336,6 +401,8 @@ class TradeMonitoringService:
                         else:
                             session_error = "Audio stream ended while live status was temporarily unknown"
                 finally:
+                    session_duration = max(0.0, time.time() - stream_start_time)
+                    backoff_tracker.record_session(session_duration, session_status)
                     self.session_logger.end_session(
                         session_rec.session_id,
                         status=session_status,
@@ -346,13 +413,11 @@ class TradeMonitoringService:
                         self._audio_stream_managers.remove(audio_mgr)
 
                 if session_status == "INTERRUPTED" and not self._stop_event.is_set():
-                    retry_delay = min(poll_interval, 5.0)
-                    try:
-                        await asyncio.wait_for(
-                            self._stop_event.wait(), timeout=retry_delay
-                        )
-                    except asyncio.TimeoutError:
-                        pass
+                    ch_logger.info(
+                        f"Audio capture session interrupted after {session_duration:.1f}s. "
+                        f"Backing off before restart (delay: {backoff_tracker.current_delay_seconds:.1f}s)..."
+                    )
+                    await backoff_tracker.wait(stop_event=self._stop_event)
 
         except asyncio.CancelledError:
             ch_logger.info("Channel monitor task cancelled.")

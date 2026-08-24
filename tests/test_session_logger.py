@@ -31,11 +31,13 @@ def test_session_lifecycle(temp_storage: Path) -> None:
     assert session.status == "ACTIVE"
     assert logger.get_total_sessions_count() == 1
 
-    # 3. Record chunks, triggers, and trades
+    # 3. Record chunks, triggers, trades, and management
     logger.record_chunk(session.session_id, count=5)
     logger.record_trigger(session.session_id)
     logger.record_trigger(session.session_id)
     logger.record_trade(session.session_id, alerted=True)
+    logger.record_management(session.session_id, alerted=True)
+    logger.record_management(session.session_id, alerted=False)
 
     # 4. End session
     ended = logger.end_session(session.session_id, status="COMPLETED")
@@ -45,6 +47,8 @@ def test_session_lifecycle(temp_storage: Path) -> None:
     assert ended.triggers_detected == 2
     assert ended.trades_detected == 1
     assert ended.trades_alerted == 1
+    assert ended.management_detected == 2
+    assert ended.management_alerted == 1
     assert ended.ended_at is not None
 
     # 5. Check persistent disk format
@@ -54,6 +58,8 @@ def test_session_lifecycle(temp_storage: Path) -> None:
     assert len(data["sessions"]) == 1
     assert data["sessions"][0]["channel_name"] == "Mehak Trades"
     assert data["sessions"][0]["trades_detected"] == 1
+    assert data["sessions"][0]["management_detected"] == 2
+    assert data["sessions"][0]["management_alerted"] == 1
 
 
 def test_multiple_sessions_summary(temp_storage: Path) -> None:

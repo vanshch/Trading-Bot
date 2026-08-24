@@ -16,8 +16,10 @@ from src.config import AIConfig
 
 logger = logging.getLogger("trade_bot.multimodal_verifier")
 
+SignalType = Literal["ENTRY", "PARTIAL_EXIT", "MOVE_STOP", "EXIT", "NONE"]
+
 MULTIMODAL_PROMPT_TEMPLATE = """You are an expert algorithmic trade auditor analyzing a live trading broadcast.
-An audio speech-to-text trigger has flagged that the trader might have entered a live trade position.
+An audio speech-to-text trigger has flagged that the trader might have entered a live trade position or given a position-management instruction.
 
 Analyze BOTH:
 1. The recent spoken transcript commentary from the trader leading up to this moment.
@@ -35,20 +37,31 @@ Recent Spoken Commentary (last 2-3 minutes):
 \"\"\"
 
 Your Task:
-- Determine if the trader has genuinely taken/entered an ACTIVE live trade (or explicitly executed an order).
-- Extract the instrument / strike, direction (CALL/PUT/BUY/SELL), entry price or range, stop-loss (SL), and target (TGT) from the spoken context and/or visible chart/order book.
-- Distinguish between hypothetical planning ("if it breaks 22400 we will buy") vs. ACTUAL execution ("bought", "entered", "order executed", "humne call le liya").
+- Classify the trader's statement into EXACTLY ONE signal_type:
+  * "ENTRY": Trader confirms taking an active live entry or gives an immediate execution instruction (e.g., "You can enter with one lot. I am taking a small scalp.", "Bought here", "Entered now", "Humne call le liya").
+  * "PARTIAL_EXIT": Trader executes or instructs booking partial profits / scaling out (e.g., "Book some profit and move SL to CTC", "Booking partial here", "Book 50%").
+  * "MOVE_STOP": Trader executes or instructs moving the stop loss to CTC / breakeven or trailing SL (e.g., "Move SL to CTC", "SL cost to cost kar do", "Trail stop to breakeven").
+  * "EXIT": Trader explicitly closes, exits, or cuts the entire remaining position (e.g., "My remaining trade is closed/cut", "Exited full position", "Position closed", "Target hit out", "SL hit cut").
+  * "NONE": No live execution or management action taking place.
+
+STRICT FAIL-CLOSED RULES (Output signal_type: "NONE", confidence: 0.0 to 0.3):
+1. REJECT Conditional / Hypothetical Statements: Statements with "if", "jab tak", "agar", planning hypothetical setups (e.g., "If it breaks 37 we will buy", "Agar 24500 break hoga tab enter karenge").
+2. REJECT Negated / Prohibitive Statements: Warnings not to execute (e.g., "Do not enter", "Don't buy yet", "No entry here").
+3. REJECT Educational / Retrospective-only Analysis: Explaining past chart history, theory, or general concepts (e.g., "Yesterday 37 was strong resistance", "This is how support works").
+4. REJECT Viewer Request / Q&A: Answering viewer questions or discussing stocks asked in comments (e.g., "Viewer asking about 37 level", "Someone asked about Tata Motors").
+5. REJECT General commentary, market chatter, or ambient noise without immediate live trade execution or position management.
 
 Output Schema:
 Respond ONLY with a valid JSON object matching these exact keys:
 {{
+  "signal_type": "ENTRY" | "PARTIAL_EXIT" | "MOVE_STOP" | "EXIT" | "NONE",
   "is_trade_active": true | false,
   "direction": "BUY" | "SELL" | "CALL" | "PUT" | "NONE",
-  "instrument": "<ticker or strike, e.g. NIFTY 24500 CE, BANKNIFTY, BTCUSDT, UNKNOWN>",
-  "entry_price": "<entry price/range or 'MARKET' if not specified, or null>",
-  "stop_loss": "<stop loss level or null>",
+  "instrument": "<ticker or strike, e.g. NIFTY 24500 CE, BANKNIFTY, GOLD, XAUUSD, BTCUSDT, UNKNOWN>",
+  "entry_price": "<entry price/range or null>",
+  "stop_loss": "<stop loss level or 'CTC' / 'Breakeven' or null>",
   "target": "<target price or null>",
-  "trigger_quote": "<the exact key spoken quote where entry was declared>",
+  "trigger_quote": "<the exact key spoken quote where entry or management was declared>",
   "confidence": <float 0.0 to 1.0>,
   "reasoning": "<concise explanation of spoken and visual evidence>"
 }}
@@ -58,8 +71,13 @@ Respond ONLY with a valid JSON object matching these exact keys:
 class MultimodalTradeVerification(BaseModel):
     """Structured validated trade verification result combining visual and spoken data."""
 
+    signal_type: SignalType = Field(
+        default="NONE",
+        description="Explicit signal category: ENTRY, PARTIAL_EXIT, MOVE_STOP, EXIT, or NONE",
+    )
     is_trade_active: bool = Field(
-        ..., description="Whether a valid trade entry or active position is confirmed"
+        default=False,
+        description="Whether a valid trade entry or active position is confirmed",
     )
     direction: Literal["BUY", "SELL", "CALL", "PUT", "NONE"] = Field(
         default="NONE", description="Trade direction or contract type"
@@ -71,20 +89,23 @@ class MultimodalTradeVerification(BaseModel):
     )
     entry_price: str | None = Field(
         default=None,
+        max_length=100,
         description="Detected entry price or execution range",
     )
     stop_loss: str | None = Field(
         default=None,
-        description="Mentioned or charted stop loss level",
+        max_length=100,
+        description="Mentioned or charted stop loss level or CTC/breakeven",
     )
     target: str | None = Field(
         default=None,
+        max_length=100,
         description="Mentioned or charted target level",
     )
     trigger_quote: str = Field(
         default="",
         max_length=300,
-        description="Key snippet spoken by the trader declaring the trade",
+        description="Key snippet spoken by the trader declaring the trade or management action",
     )
     confidence: float = Field(
         default=0.0, ge=0.0, le=1.0, description="Confidence score from 0.0 to 1.0"
@@ -94,6 +115,42 @@ class MultimodalTradeVerification(BaseModel):
         max_length=600,
         description="Brief explanation of findings across audio and image",
     )
+
+    @field_validator("signal_type", mode="before")
+    @classmethod
+    def normalize_signal_type(cls, v: Any) -> str:
+        if not isinstance(v, str):
+            return "NONE"
+        clean = v.upper().strip().replace("-", "_").replace(" ", "_")
+        if clean in ("ENTRY", "ENTER", "NEW_TRADE", "NEW", "OPEN", "BUY", "SELL", "CALL", "PUT"):
+            return "ENTRY"
+        if clean in (
+            "PARTIAL_EXIT",
+            "PARTIAL",
+            "PARTIAL_PROFIT",
+            "BOOK_PROFIT",
+            "BOOKED_PROFIT",
+            "BOOKING_PROFIT",
+            "PARTIAL_BOOKING",
+            "SCALE_OUT",
+        ):
+            return "PARTIAL_EXIT"
+        if clean in (
+            "MOVE_STOP",
+            "MOVE_SL",
+            "SL_TO_CTC",
+            "CTC",
+            "COST_TO_COST",
+            "BREAKEVEN",
+            "TRAIL_SL",
+            "TRAILING_SL",
+            "TRAIL_STOP",
+            "TRAILING_STOP",
+        ):
+            return "MOVE_STOP"
+        if clean in ("EXIT", "CLOSE", "CLOSED", "CUT", "SL_HIT", "TARGET_HIT"):
+            return "EXIT"
+        return "NONE"
 
     @field_validator("direction", mode="before")
     @classmethod
@@ -121,11 +178,25 @@ class MultimodalTradeVerification(BaseModel):
             return 0.0
 
     @model_validator(mode="after")
-    def validate_active_direction(self) -> MultimodalTradeVerification:
-        if self.is_trade_active and self.direction == "NONE":
-            # Default to BUY if active but direction wasn't specifically parsed
+    def validate_signal_and_active_state(self) -> MultimodalTradeVerification:
+        # Backward compatibility is allowed only when the new field was omitted.
+        # An explicit NONE always wins so an inconsistent provider response fails closed.
+        signal_type_was_supplied = "signal_type" in self.__pydantic_fields_set__
+        if (
+            self.signal_type == "NONE"
+            and self.is_trade_active
+            and not signal_type_was_supplied
+        ):
+            self.signal_type = "ENTRY"
+
+        if self.signal_type in ("ENTRY", "PARTIAL_EXIT", "MOVE_STOP"):
+            self.is_trade_active = True
+        elif self.signal_type in ("EXIT", "NONE"):
+            self.is_trade_active = False
+
+        if self.signal_type == "ENTRY" and self.direction == "NONE":
             self.direction = "BUY"
-        if not self.is_trade_active:
+        if not self.is_trade_active and self.signal_type == "NONE":
             self.direction = "NONE"
         return self
 
@@ -239,14 +310,16 @@ class MultimodalVerifier:
                 raise
 
         if (
-            verification.is_trade_active
+            verification.signal_type != "NONE"
             and verification.confidence < self.config.confidence_threshold
         ):
             logger.info(
-                "Multimodal trade confidence %.2f is below threshold %.2f; suppressing",
+                "Multimodal signal %s confidence %.2f is below threshold %.2f; suppressing (fail-closed)",
+                verification.signal_type,
                 verification.confidence,
                 self.config.confidence_threshold,
             )
+            verification.signal_type = "NONE"
             verification.is_trade_active = False
             verification.direction = "NONE"
 
@@ -287,9 +360,9 @@ class MultimodalVerifier:
                 )
                 verification = self._parse_response(raw_text)
                 logger.info(
-                    f"Multimodal Verification result ({model_to_use}): is_active={verification.is_trade_active}, "
-                    f"direction={verification.direction}, instrument={verification.instrument}, "
-                    f"confidence={verification.confidence:.2f}"
+                    f"Multimodal Verification result ({model_to_use}): signal={verification.signal_type}, "
+                    f"is_active={verification.is_trade_active}, direction={verification.direction}, "
+                    f"instrument={verification.instrument}, confidence={verification.confidence:.2f}"
                 )
                 return verification
             except Exception as exc:  # noqa: BLE001 - SDK boundary exposes varied exceptions
@@ -302,6 +375,7 @@ class MultimodalVerifier:
 
         # Safe fallback
         return MultimodalTradeVerification(
+            signal_type="NONE",
             is_trade_active=False,
             direction="NONE",
             instrument="UNKNOWN",

@@ -1,6 +1,6 @@
 # YouTube Live Stream Trade Monitoring Bot
 
-An audio-first monitoring worker that polls YouTube trading channels, translates live audio to English with Groq Audio Translations (`whisper-large-v3`), detects configured spoken entry phrases, verifies candidates from the transcript plus a live screenshot with Gemini, and dispatches Telegram trade alerts. The OpenCV filter is currently used by the offline video benchmark, not by the live orchestration loop.
+An audio-first monitoring worker that polls YouTube trading channels, translates live audio to English with Groq Audio Translations (`whisper-large-v3`), detects configured entry and position-management phrases, verifies candidates from the transcript plus a live screenshot with Gemini, and dispatches Telegram alerts. The OpenCV filter is currently used by the offline video benchmark, not by the live orchestration loop.
 
 ---
 
@@ -22,7 +22,7 @@ An audio-first monitoring worker that polls YouTube trading channels, translates
           [Gemini Multimodal Verification]
                        │
                        ▼
-[TradeStateTracker (NEW_TRADE, STILL_ACTIVE, TRADE_CLOSED)]
+[TradeStateTracker (NEW_TRADE, MANAGEMENT_UPDATE, TRADE_CLOSED)]
                        │
                        ▼
        [Telegram Alert + Session Metrics]
@@ -97,8 +97,11 @@ channels:
     trigger_keywords:
       - active
       - activated
+      - enter
       - entry
       - entered
+      - scalp
+      - scalping
       - bought
       - buy
       - sold
@@ -108,6 +111,13 @@ channels:
       - position
       - executed
       - order placed
+      - book profit
+      - partial booking
+      - ctc
+      - move sl
+      - close
+      - exit
+      - cut
     trader_profile: Mehak Trades is an SMC and price action Forex and Gold trader broadcasting live commentary in Hindi/Hinglish. She focuses on XAUUSD, Gold, Forex, Bitcoin, Order Blocks, Fair Value Gaps (FVG), liquidity sweeps, and trade setups.
 
   - name: "Naresh Cool Trader"
@@ -138,12 +148,16 @@ audio:
   model: "whisper-large-v3"
   chunk_duration_seconds: 10.0
   context_buffer_seconds: 120
-  initial_prompt: "Trade active. Entry taken. Buy executed. Sell executed. Short position. Long position. Stop loss. Target hit. Order placed. Gold, XAUUSD, BTC, Bitcoin, Forex."
+  initial_prompt: "Trade active. Entry taken. Buy executed. Sell executed. Short position. Long position. Stop loss. Target hit. Order placed. Scalp. Scalping. Book profit. Move SL to CTC. Trade closed. Gold, XAUUSD, BTC, Bitcoin, Forex."
   temperature: 0.0
 
 capture:
   frame_interval_seconds: 5.0
   live_poll_interval_seconds: 60.0
+  restart_initial_delay_seconds: 1.0
+  restart_max_delay_seconds: 30.0
+  restart_backoff_factor: 2.0
+  restart_reset_window_seconds: 300.0
 
 cv_filter:
   min_line_length_ratio: 0.10

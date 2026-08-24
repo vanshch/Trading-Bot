@@ -127,3 +127,62 @@ The second Antigravity remediation passed its own suite but still required an in
 - [ ] For config/file mutations, use atomic replacement and inject replacement failure to prove the original remains recoverable.
 - [ ] Serialize Pydantic models in JSON mode before YAML output so enums and other rich types remain safe-loadable.
 - [ ] Document that exact provider endpoint probes create real billable requests at runtime; keep automated tests mocked and invoke live preflight intentionally.
+
+---
+
+## 8. August 25, 2026: Live-Capture and Signal-Coverage Remediation
+
+### Production evidence that triggered the work
+
+- The audited broadcast produced 450 capture sessions, 449 marked interrupted, and only about 55.6% transcript coverage. A process merely starting was therefore not evidence that the transport remained healthy.
+- Streamlink runtime EOF/exit was not routed to the already available direct FFmpeg path.
+- Subprocess stderr was discarded, so the reason for repeated capture failure was unavailable.
+- A fixed five-second outer retry created a restart storm, and alert timestamps restarted with each capture session.
+- The English keyword set missed actual execution wording (`enter`, `scalp`) and did not trigger on partial-profit, CTC/breakeven, stop-management, or explicit exit language.
+
+### Reusable implementation lessons
+
+- Treat transport startup and transport survival as separate states. If Streamlink exits, stalls, or reaches EOF after startup, perform one bounded direct-FFmpeg attempt with the freshly resolved media URL before returning to outer resolution.
+- Drain every subprocess stderr concurrently. Retain both a bounded line count and bounded line size, then sanitize signed query strings and registered secrets before logging only a short diagnostic tail.
+- Size a retry reset window from observed failure durations. The initial 60-second reset proposed by AGY was shorter than the 120–140-second failing sessions and would have repeatedly erased backoff; the accepted default is 300 seconds.
+- Preserve a broadcast-relative timestamp across transport restarts. Reset it only on confirmed offline state or a changed broadcast ID, and release stale video capture when the resolved media URL changes.
+- Build trigger coverage from the audited transcript corpus, not intuition. Keyword detection is only a low-cost wake-up gate; Gemini must still reject conditional, negated, educational, retrospective-only, viewer-request, and general commentary.
+- Model lifecycle actions explicitly (`ENTRY`, `PARTIAL_EXIT`, `MOVE_STOP`, `EXIT`, `NONE`). Management signals must not fabricate an open position, and explicit exits should close state immediately.
+- Apply cooldowns per action class. One global trigger cooldown can suppress a legitimate stop move or exit immediately following an entry or partial booking.
+- Preserve fail-closed precedence when adding backward compatibility. An explicitly returned `NONE` must not become `ENTRY` merely because a provider also returns an inconsistent legacy boolean.
+- Telegram photo captions have a 1024-character limit. If an escaped management alert exceeds it, send the full alert as a regular message rather than failing delivery.
+
+### AGY acceptance findings
+
+AGY's delegated changes passed its reported 323-test suite, but independent review still found and corrected:
+
+- explicit `NONE` responses being reopened as entries;
+- unknown management direction being fabricated as `BUY`;
+- one global trigger cooldown suppressing different action types;
+- explicit active-trade exits using a non-timestamped legacy alert;
+- missing cross-field validation for restart delay bounds;
+- cleanup not being guaranteed when reader-thread startup failed;
+- stale broadcast clocks and video captures when a live broadcast or resolved URL changed;
+- unbounded management photo captions causing Telegram delivery failure.
+
+### Regression checklist for the next Antigravity run
+
+- [ ] Reproduce runtime failures, not only subprocess startup failures.
+- [ ] Test fallback success, fallback failure, EOF, stall, cancellation, and partial-start cleanup.
+- [ ] Test diagnostic redaction, maximum retained lines, and maximum line length.
+- [ ] Test backoff growth, cap, sustained-success reset, and interruptible shutdown against production-like session durations.
+- [ ] Test stable clocks across transport restarts and clock reset on a changed broadcast ID.
+- [ ] Use exact audited phrases for entry, combined partial/CTC management, and explicit close/cut.
+- [ ] Prove explicit `NONE` remains fail-closed even with inconsistent legacy fields.
+- [ ] Prove repeated synonyms are suppressed while different management actions are not.
+- [ ] Test escaped Telegram content and oversized photo-caption fallback.
+- [ ] Never accept an AGY-reported green suite without inspecting every changed file and adding adversarial acceptance tests.
+
+### Final independent validation
+
+- `pytest tests -q`: 333 passed, 3 subtests passed in 7.74 seconds.
+- `ruff check src tests scripts main.py`: all checks passed.
+- `uv pip check --python .\.venv\Scripts\python.exe`: 80 packages checked and compatible.
+- `python -m compileall -q src scripts main.py benchmark.py`: passed.
+- `git diff --check`: passed.
+- No live provider calls were made during implementation or testing.

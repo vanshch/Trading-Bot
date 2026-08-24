@@ -196,6 +196,113 @@ class TestTelegramNotifier(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result)
         self.assertEqual(mock_post.call_count, 1)
 
+    def test_format_management_alert_message_partial_exit(self) -> None:
+        from src.multimodal_verifier import MultimodalTradeVerification
+        v = MultimodalTradeVerification(
+            signal_type="PARTIAL_EXIT",
+            direction="BUY",
+            instrument="GOLD",
+            stop_loss="CTC",
+            trigger_quote="Book some profit and move SL to CTC.",
+            confidence=0.92,
+            reasoning="Took 50% profits off table",
+        )
+        msg = self.notifier.format_management_alert_message(
+            channel_name="Mehak Trades",
+            verification=v,
+            stream_url="https://youtube.com/watch?v=live123",
+            elapsed_seconds=3665,
+        )
+        self.assertIn("TRADE MANAGEMENT: Mehak Trades", msg)
+        self.assertIn("PARTIAL PROFIT BOOKED", msg)
+        self.assertIn("GOLD", msg)
+        self.assertIn("SL: CTC", msg)
+        self.assertIn("Book some profit and move SL to CTC.", msg)
+        self.assertIn("t=1h1m5s", msg)
+
+    def test_format_management_alert_message_escapes_html(self) -> None:
+        from src.multimodal_verifier import MultimodalTradeVerification
+        v = MultimodalTradeVerification(
+            signal_type="MOVE_STOP",
+            direction="BUY",
+            instrument="<evil>&fake",
+            stop_loss="<CTC>",
+            trigger_quote='<script>alert("xss")</script>',
+            confidence=0.90,
+            reasoning="<b>dangerous</b>",
+        )
+        msg = self.notifier.format_management_alert_message(
+            channel_name="<Hacker>",
+            verification=v,
+            stream_url="https://youtube.com/watch?v=123",
+        )
+        self.assertNotIn("<script>", msg)
+        self.assertIn("&lt;script&gt;", msg)
+        self.assertNotIn("<evil>", msg)
+        self.assertIn("&lt;evil&gt;&amp;fake", msg)
+        self.assertIn("&lt;Hacker&gt;", msg)
+
+    @patch("aiohttp.ClientSession.post")
+    async def test_send_management_alert_with_photo(self, mock_post: MagicMock) -> None:
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.__aenter__.return_value = mock_response
+        mock_post.return_value = mock_response
+
+        from src.multimodal_verifier import MultimodalTradeVerification
+        v = MultimodalTradeVerification(
+            signal_type="MOVE_STOP",
+            direction="BUY",
+            instrument="GOLD",
+            stop_loss="CTC",
+            confidence=0.9,
+        )
+
+        result = await self.notifier.send_management_alert(
+            channel_name="Mehak Trades",
+            verification=v,
+            stream_url="https://youtube.com/watch?v=live123",
+            frame_bytes=b"fake_frame_bytes",
+            elapsed_seconds=120,
+        )
+        self.assertTrue(result)
+        self.assertEqual(mock_post.call_count, 1)
+        self.assertIn("sendPhoto", mock_post.call_args[0][0])
+
+    @patch("aiohttp.ClientSession.post")
+    async def test_long_management_alert_falls_back_to_message(
+        self, mock_post: MagicMock
+    ) -> None:
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.__aenter__.return_value = mock_response
+        mock_post.return_value = mock_response
+
+        from src.multimodal_verifier import MultimodalTradeVerification
+
+        verification = MultimodalTradeVerification(
+            signal_type="PARTIAL_EXIT",
+            direction="BUY",
+            instrument="G" * 100,
+            entry_price="1" * 100,
+            stop_loss="2" * 100,
+            target="3" * 100,
+            trigger_quote="q" * 300,
+            confidence=0.9,
+            reasoning="r" * 600,
+        )
+
+        result = await self.notifier.send_management_alert(
+            channel_name="Mehak Trades",
+            verification=verification,
+            stream_url="https://youtube.com/watch?v=live123",
+            frame_bytes=b"fake_frame_bytes",
+            elapsed_seconds=120,
+        )
+
+        self.assertTrue(result)
+        self.assertIn("sendMessage", mock_post.call_args[0][0])
+
 
 if __name__ == "__main__":
     unittest.main()

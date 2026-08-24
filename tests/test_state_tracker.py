@@ -161,6 +161,115 @@ class TestTradeStateTracker(unittest.TestCase):
         self.assertAlmostEqual(trade.duration_seconds, 860, delta=1.0)
         self.assertEqual(trade.formatted_duration, "14m 20s")
 
+    def test_management_update_preserves_active_trade(self) -> None:
+        """PARTIAL_EXIT and MOVE_STOP must preserve active trade and emit MANAGEMENT_UPDATE."""
+        # 1. Open trade
+        v_open = TradeVerification(is_trade_active=True, direction="BUY", instrument="GOLD", confidence=0.9)
+        t_open, trade_open = self.tracker.process_verification(self.channel_name, v_open)
+        self.assertEqual(t_open, StateTransition.NEW_TRADE)
+        self.assertEqual(self.tracker.get_state(self.channel_name), TradeState.ACTIVE_TRADE)
+
+        # 2. Emit PARTIAL_EXIT
+        from src.multimodal_verifier import MultimodalTradeVerification
+        v_partial = MultimodalTradeVerification(
+            signal_type="PARTIAL_EXIT",
+            direction="BUY",
+            instrument="GOLD",
+            stop_loss="CTC",
+            confidence=0.92,
+        )
+        t_part, trade_part = self.tracker.process_verification(self.channel_name, v_partial)
+        self.assertEqual(t_part, StateTransition.MANAGEMENT_UPDATE)
+        self.assertIsNotNone(trade_part)
+        self.assertEqual(self.tracker.get_state(self.channel_name), TradeState.ACTIVE_TRADE)
+        self.assertIs(trade_part, trade_open)
+
+    def test_duplicate_management_suppression_and_different_action_allowance(self) -> None:
+        """Repeated management actions of same type within cooldown are suppressed, but different actions pass."""
+        from src.multimodal_verifier import MultimodalTradeVerification
+        self.tracker.management_cooldown_seconds = 30.0
+
+        # Open trade
+        v_open = MultimodalTradeVerification(signal_type="ENTRY", direction="BUY", instrument="GOLD", confidence=0.9)
+        self.tracker.process_verification(self.channel_name, v_open)
+
+        # 1. First PARTIAL_EXIT -> MANAGEMENT_UPDATE
+        v_part1 = MultimodalTradeVerification(signal_type="PARTIAL_EXIT", direction="BUY", instrument="GOLD", confidence=0.9)
+        t1, _ = self.tracker.process_verification(self.channel_name, v_part1)
+        self.assertEqual(t1, StateTransition.MANAGEMENT_UPDATE)
+
+        # 2. Immediate second PARTIAL_EXIT within cooldown -> STILL_ACTIVE (suppressed duplicate)
+        v_part2 = MultimodalTradeVerification(signal_type="PARTIAL_EXIT", direction="BUY", instrument="GOLD", confidence=0.9)
+        t2, _ = self.tracker.process_verification(self.channel_name, v_part2)
+        self.assertEqual(t2, StateTransition.STILL_ACTIVE)
+
+        # 3. MOVE_STOP (different action) -> MANAGEMENT_UPDATE (allowed!)
+        v_stop = MultimodalTradeVerification(signal_type="MOVE_STOP", direction="BUY", instrument="GOLD", stop_loss="CTC", confidence=0.9)
+        t3, _ = self.tracker.process_verification(self.channel_name, v_stop)
+        self.assertEqual(t3, StateTransition.MANAGEMENT_UPDATE)
+
+    def test_explicit_exit_closes_trade_immediately(self) -> None:
+        """Explicit EXIT signal must close an active trade immediately without miss-threshold waiting."""
+        from src.multimodal_verifier import MultimodalTradeVerification
+
+        # Open trade
+        v_open = MultimodalTradeVerification(signal_type="ENTRY", direction="BUY", instrument="GOLD", confidence=0.9)
+        self.tracker.process_verification(self.channel_name, v_open)
+        self.assertEqual(self.tracker.get_state(self.channel_name), TradeState.ACTIVE_TRADE)
+
+        # Explicit exit
+        v_exit = MultimodalTradeVerification(signal_type="EXIT", direction="BUY", instrument="GOLD", confidence=0.95)
+        t_exit, trade_exit = self.tracker.process_verification(self.channel_name, v_exit)
+
+        self.assertEqual(t_exit, StateTransition.TRADE_CLOSED)
+        self.assertIsNotNone(trade_exit)
+        self.assertIsNotNone(trade_exit.closed_at)
+        self.assertEqual(self.tracker.get_state(self.channel_name), TradeState.IDLE)
+        self.assertIsNone(self.tracker.get_active_trade(self.channel_name))
+
+    def test_missed_entry_management_alert_without_fabricating_active_position(self) -> None:
+        """A verified management instruction when IDLE (missed entry) emits MANAGEMENT_UPDATE without fabricating an active position."""
+        from src.multimodal_verifier import MultimodalTradeVerification
+
+        # Channel starts IDLE
+        self.assertEqual(self.tracker.get_state(self.channel_name), TradeState.IDLE)
+
+        # Spoken management signal arrives
+        v_part = MultimodalTradeVerification(
+            signal_type="PARTIAL_EXIT",
+            direction="BUY",
+            instrument="GOLD",
+            stop_loss="CTC",
+            confidence=0.90,
+        )
+        transition, trade = self.tracker.process_verification(self.channel_name, v_part)
+
+        self.assertEqual(transition, StateTransition.MANAGEMENT_UPDATE)
+        self.assertIsNotNone(trade)
+        self.assertEqual(trade.instrument, "GOLD")
+        # Channel state MUST remain IDLE; active position must NOT be fabricated!
+        self.assertEqual(self.tracker.get_state(self.channel_name), TradeState.IDLE)
+        self.assertIsNone(self.tracker.get_active_trade(self.channel_name))
+
+    def test_missed_entry_explicit_exit_when_idle(self) -> None:
+        """A verified explicit exit when IDLE emits TRADE_CLOSED without fabricating an active position."""
+        from src.multimodal_verifier import MultimodalTradeVerification
+
+        self.assertEqual(self.tracker.get_state(self.channel_name), TradeState.IDLE)
+
+        v_exit = MultimodalTradeVerification(
+            signal_type="EXIT",
+            direction="BUY",
+            instrument="GOLD",
+            confidence=0.90,
+        )
+        transition, trade = self.tracker.process_verification(self.channel_name, v_exit)
+
+        self.assertEqual(transition, StateTransition.TRADE_CLOSED)
+        self.assertIsNotNone(trade)
+        self.assertEqual(self.tracker.get_state(self.channel_name), TradeState.IDLE)
+        self.assertIsNone(self.tracker.get_active_trade(self.channel_name))
+
 
 if __name__ == "__main__":
     unittest.main()

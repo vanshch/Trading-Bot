@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from src.config import (
     AIConfig,
+    CaptureConfig,
     ChannelConfig,
     ChannelMode,
     ConfigurationError,
@@ -107,8 +108,21 @@ class TestConfigValidation(unittest.TestCase):
         self.assertIsNone(audio_cfg.language)
         self.assertEqual(
             audio_cfg.initial_prompt,
-            "Trade active. Entry taken. Buy executed. Sell executed. Short position. Long position. Stop loss. Target hit. Order placed. Gold, XAUUSD, BTC, Bitcoin, Forex.",
+            "Trade active. Entry taken. Buy executed. Sell executed. Short position. Long position. Stop loss. Target hit. Order placed. Scalp. Scalping. Book profit. Move SL to CTC. Trade closed. Gold, XAUUSD, BTC, Bitcoin, Forex.",
         )
+
+    def test_capture_restart_delay_bounds(self) -> None:
+        cfg = CaptureConfig(
+            restart_initial_delay_seconds=2.0,
+            restart_max_delay_seconds=2.0,
+        )
+        self.assertEqual(cfg.restart_max_delay_seconds, 2.0)
+
+        with self.assertRaises(ValidationError):
+            CaptureConfig(
+                restart_initial_delay_seconds=5.0,
+                restart_max_delay_seconds=2.0,
+            )
 
     def test_valid_roi_crop(self) -> None:
         roi = ROICropConfig(top=0.1, bottom=0.9, left=0.2, right=0.8)
@@ -373,6 +387,9 @@ class TestLoadConfig(unittest.TestCase):
         audio_prompt = raw["audio"]["initial_prompt"]
         self.assertIn("XAUUSD", audio_prompt)
         self.assertIn("Gold", audio_prompt)
+        self.assertIn("Scalp", audio_prompt)
+        self.assertIn("Book profit", audio_prompt)
+        self.assertIn("Move SL to CTC", audio_prompt)
         self.assertNotIn("BankNifty", audio_prompt)
 
 

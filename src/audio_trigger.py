@@ -7,12 +7,77 @@ from dataclasses import dataclass
 
 logger = logging.getLogger("trade_bot.audio_trigger")
 
+_PARTIAL_EXIT_MARKERS = (
+    "book profit",
+    "booked profit",
+    "booking profit",
+    "book some profit",
+    "book partial",
+    "booked partial",
+    "partial book",
+    "partial booking",
+    "partial profit",
+)
+_MOVE_STOP_MARKERS = (
+    "ctc",
+    "cost to cost",
+    "cost-to-cost",
+    "breakeven",
+    "break even",
+    "break-even",
+    "move sl",
+    "sl to ctc",
+    "move stop",
+    "trailing sl",
+    "trail sl",
+    "trail stop",
+    "sl shifted",
+    "shifted sl",
+    "sl moved",
+)
+_EXIT_MARKERS = (
+    "target hit",
+    "sl hit",
+    "stop hit",
+    "stop loss hit",
+    "close",
+    "closed",
+    "exit",
+    "exited",
+    "cut",
+    "cutting",
+    "trade closed",
+    "trade is closed",
+    "trade cut",
+)
+
+
+def _keyword_group(keyword: str) -> str:
+    """Group synonymous triggers so duplicates do not block a different action."""
+    normalized = " ".join(keyword.casefold().split())
+    if any(marker in normalized for marker in _PARTIAL_EXIT_MARKERS):
+        return "PARTIAL_EXIT"
+    if any(marker in normalized for marker in _MOVE_STOP_MARKERS):
+        return "MOVE_STOP"
+    if any(marker in normalized for marker in _EXIT_MARKERS):
+        return "EXIT"
+    return "ENTRY"
+
 DEFAULT_FALLBACK_KEYWORDS: list[str] = [
     # English execution triggers (Whisper /translations always outputs English)
     "active",
     "activated",
-    "entry",
+    "enter",
     "entered",
+    "entry",
+    "taking entry",
+    "take entry",
+    "entry taken",
+    "scalp",
+    "scalping",
+    "taking scalp",
+    "taking a scalp",
+    "take a scalp",
     "bought",
     "buy",
     "sold",
@@ -22,6 +87,44 @@ DEFAULT_FALLBACK_KEYWORDS: list[str] = [
     "position",
     "executed",
     "order placed",
+    # Position management triggers
+    "book profit",
+    "booked profit",
+    "booking profit",
+    "book some profit",
+    "book partial",
+    "booked partial",
+    "partial book",
+    "partial booking",
+    "partial profit",
+    "ctc",
+    "cost to cost",
+    "cost-to-cost",
+    "breakeven",
+    "break even",
+    "break-even",
+    "move sl",
+    "sl to ctc",
+    "move stop",
+    "trailing sl",
+    "trail sl",
+    "trail stop",
+    "sl shifted",
+    "shifted sl",
+    "sl moved",
+    "target hit",
+    "sl hit",
+    "stop hit",
+    "stop loss hit",
+    "close",
+    "closed",
+    "exit",
+    "exited",
+    "cut",
+    "cutting",
+    "trade closed",
+    "trade is closed",
+    "trade cut",
 ]
 
 
@@ -94,8 +197,8 @@ class AudioTriggerDetector:
         keywords = trigger_keywords if trigger_keywords else DEFAULT_FALLBACK_KEYWORDS
         self.keywords = [k.strip() for k in keywords if k.strip()]
         self.cooldown_seconds = cooldown_seconds
-        self._last_trigger_time: float = 0.0
-        self._compiled_patterns: list[tuple[str, re.Pattern]] = []
+        self._last_trigger_times: dict[str, float] = {}
+        self._compiled_patterns: list[tuple[str, str, re.Pattern[str]]] = []
         self._compile_patterns()
 
     def _compile_patterns(self) -> None:
@@ -105,7 +208,7 @@ class AudioTriggerDetector:
             # Escape keyword and allow flexible whitespace between words
             escaped = re.escape(kw).replace(r"\ ", r"\s+")
             pattern = re.compile(rf"\b{escaped}\b", re.IGNORECASE)
-            self._compiled_patterns.append((kw, pattern))
+            self._compiled_patterns.append((kw, _keyword_group(kw), pattern))
 
     def update_keywords(self, new_keywords: list[str]) -> None:
         """Update active trigger keyword list."""
@@ -122,13 +225,12 @@ class AudioTriggerDetector:
             return False, None
 
         now = time.time()
-        if now - self._last_trigger_time < self.cooldown_seconds:
-            # Still in cooldown window from previous trigger
-            return False, None
-
-        for kw, pattern in self._compiled_patterns:
+        for kw, group, pattern in self._compiled_patterns:
             if pattern.search(chunk_text):
-                self._last_trigger_time = now
+                last_trigger_time = self._last_trigger_times.get(group, 0.0)
+                if now - last_trigger_time < self.cooldown_seconds:
+                    continue
+                self._last_trigger_times[group] = now
                 logger.info(f"Audio trigger detected: '{kw}' in chunk: '{chunk_text}'")
                 return True, kw
 
@@ -136,4 +238,4 @@ class AudioTriggerDetector:
 
     def reset_cooldown(self) -> None:
         """Reset the trigger cooldown timer."""
-        self._last_trigger_time = 0.0
+        self._last_trigger_times.clear()

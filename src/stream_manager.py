@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from enum import Enum
 
 import cv2
@@ -170,6 +171,8 @@ class StreamManager:
         self.config = config or CaptureConfig()
         self._current_stream_url: str | None = None
         self._broadcast_id: str | None = None
+        self._broadcast_start_time: float | None = None
+        self._first_live_time: float | None = None
         self._is_live: bool = False
         self._status: StreamStatus = StreamStatus.OFFLINE
         self._consecutive_errors: int = 0
@@ -195,7 +198,14 @@ class StreamManager:
         """Return the latest confirmed broadcast/video ID from yt-dlp metadata."""
         return self._broadcast_id
 
-    def _resolve_stream_url_sync(self) -> tuple[StreamStatus, str | None, str | None]:
+    @property
+    def broadcast_start_time(self) -> float | None:
+        """Return the confirmed or estimated broadcast start timestamp in epoch seconds."""
+        return self._broadcast_start_time
+
+    def _resolve_stream_url_sync(
+        self,
+    ) -> tuple[StreamStatus, str | None, str | None, float | None]:
         """Synchronously check live status and extract direct stream URL using yt-dlp."""
         ydl_opts = {
             "quiet": True,
@@ -214,14 +224,14 @@ class StreamManager:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(self.channel_url, download=False)
                 if info is None:
-                    return StreamStatus.UNKNOWN, None, None
+                    return StreamStatus.UNKNOWN, None, None, None
 
                 # Check if live
                 is_live = info.get("is_live", False)
                 live_status = info.get("live_status", "")
 
                 if not is_live and live_status != "is_live":
-                    return StreamStatus.OFFLINE, None, None
+                    return StreamStatus.OFFLINE, None, None, None
 
                 stream_url = select_best_audio_stream_url(info)
                 raw_id = info.get("id") or info.get("video_id")
@@ -231,9 +241,23 @@ class StreamManager:
                     else None
                 )
 
+                # Validate broadcast start timestamp from YouTube metadata if present
+                raw_start = info.get("release_timestamp") or info.get("timestamp")
+                broadcast_start: float | None = None
+                if raw_start is not None:
+                    try:
+                        val = float(raw_start)
+                        if val > 0:
+                            now_ts = time.time()
+                            # Valid within reasonable window (not >5min in future, not older than 30 days)
+                            if (now_ts - 30 * 86400) <= val <= (now_ts + 300):
+                                broadcast_start = val
+                    except (ValueError, TypeError):
+                        pass
+
                 if stream_url:
-                    return StreamStatus.LIVE, stream_url, broadcast_id
-                return StreamStatus.UNKNOWN, None, None
+                    return StreamStatus.LIVE, stream_url, broadcast_id, broadcast_start
+                return StreamStatus.UNKNOWN, None, None, None
 
         except yt_dlp.utils.DownloadError as exc:
             err_str = str(exc).lower()
@@ -248,32 +272,55 @@ class StreamManager:
                 or "is upcoming" in err_str
             ):
                 logger.debug(f"Channel {self.channel_url} is offline: {exc}")
-                return StreamStatus.OFFLINE, None, None
+                return StreamStatus.OFFLINE, None, None, None
             else:
                 logger.warning(f"DownloadError resolving {self.channel_url}: {exc}")
-                return StreamStatus.UNKNOWN, None, None
+                return StreamStatus.UNKNOWN, None, None, None
         except Exception as exc:  # noqa: BLE001 - provider boundary must fail closed
             logger.warning(
                 f"Unexpected error resolving stream for {self.channel_url}: {exc}"
             )
-            return StreamStatus.UNKNOWN, None, None
+            return StreamStatus.UNKNOWN, None, None, None
 
     async def check_live_status(self) -> tuple[StreamStatus, str | None]:
         """Asynchronously check if the stream is currently active and resolve stream URL."""
-        status, stream_url, broadcast_id = await asyncio.to_thread(
-            self._resolve_stream_url_sync
-        )
+        (
+            status,
+            stream_url,
+            broadcast_id,
+            broadcast_start_time,
+        ) = await asyncio.to_thread(self._resolve_stream_url_sync)
         self._status = status
 
         if status == StreamStatus.LIVE:
+            previous_stream_url = self._current_stream_url
+            previous_broadcast_id = self._broadcast_id
+            broadcast_changed = bool(
+                previous_broadcast_id
+                and broadcast_id
+                and previous_broadcast_id != broadcast_id
+            )
+            if previous_stream_url and stream_url != previous_stream_url:
+                self._close_capture()
+            if broadcast_changed:
+                self._first_live_time = None
+                self._broadcast_start_time = None
             self._is_live = True
             self._current_stream_url = stream_url
             self._broadcast_id = broadcast_id
             self._consecutive_errors = 0
+            if broadcast_start_time is not None:
+                self._broadcast_start_time = broadcast_start_time
+            elif self._broadcast_start_time is None:
+                if self._first_live_time is None:
+                    self._first_live_time = time.time()
+                self._broadcast_start_time = self._first_live_time
         elif status == StreamStatus.OFFLINE:
             self._is_live = False
             self._current_stream_url = None
             self._broadcast_id = None
+            self._broadcast_start_time = None
+            self._first_live_time = None
             self._close_capture()
         elif status == StreamStatus.UNKNOWN:
             # Preserve the prior known live state and broadcast_id across transient/unknown results
@@ -351,3 +398,5 @@ class StreamManager:
         self._status = StreamStatus.OFFLINE
         self._current_stream_url = None
         self._broadcast_id = None
+        self._broadcast_start_time = None
+        self._first_live_time = None

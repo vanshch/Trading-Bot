@@ -39,6 +39,8 @@ class LiveSessionRecord:
     triggers_detected: int = 0
     trades_detected: int = 0
     trades_alerted: int = 0
+    management_detected: int = 0
+    management_alerted: int = 0
     error_message: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -133,6 +135,15 @@ class LiveSessionLogger:
                 if alerted:
                     session.trades_alerted += 1
 
+    def record_management(self, session_id: str, alerted: bool = True) -> None:
+        """Increment confirmed trade management action count and alert count."""
+        with self._lock:
+            session = self._active_sessions.get(session_id)
+            if session:
+                session.management_detected += 1
+                if alerted:
+                    session.management_alerted += 1
+
     def end_session(
         self,
         session_id: str,
@@ -179,7 +190,8 @@ class LiveSessionLogger:
         logger.info(
             f"Logged live broadcast completion [session={session.session_id}] for '{session.channel_name}' "
             f"(Duration: {session.duration_seconds:.1f}s, Chunks: {session.chunks_processed}, "
-            f"Triggers: {session.triggers_detected}, Trades: {session.trades_detected})"
+            f"Triggers: {session.triggers_detected}, Trades: {session.trades_detected}, "
+            f"Management: {session.management_detected})"
         )
         return session
 
@@ -203,6 +215,8 @@ class LiveSessionLogger:
         total_triggers = sum(s.triggers_detected for s in sessions)
         total_trades = sum(s.trades_detected for s in sessions)
         total_alerts = sum(s.trades_alerted for s in sessions)
+        total_mgmt_detected = sum(s.management_detected for s in sessions)
+        total_mgmt_alerted = sum(s.management_alerted for s in sessions)
 
         channel_counts: dict[str, int] = {}
         for s in sessions:
@@ -223,6 +237,8 @@ class LiveSessionLogger:
             "total_triggers_detected": total_triggers,
             "total_trades_detected": total_trades,
             "total_telegram_alerts_sent": total_alerts,
+            "total_management_detected": total_mgmt_detected,
+            "total_management_alerted": total_mgmt_alerted,
             "channels_breakdown": channel_counts,
         }
 
@@ -241,7 +257,8 @@ class LiveSessionLogger:
             f"Total Audio Chunks Processed:  {summary['total_audio_chunks_processed']}",
             f"Total Spoken Triggers Fired:   {summary['total_triggers_detected']}",
             f"Total Active Trades Confirmed: {summary['total_trades_detected']}",
-            f"Total Telegram Alerts Sent:    {summary['total_telegram_alerts_sent']}",
+            f"Total Position Mgmt Actions:  {summary['total_management_detected']}",
+            f"Total Telegram Alerts Sent:    {summary['total_telegram_alerts_sent'] + summary['total_management_alerted']}",
             "-" * 65,
             "Channels Breakdown:",
         ]
