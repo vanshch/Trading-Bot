@@ -2,12 +2,13 @@
 
 import asyncio
 import collections
+import concurrent.futures
 import logging
 import re
 import subprocess
 import sys
 import threading
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Any
 from urllib.parse import urlparse
 
@@ -135,9 +136,11 @@ class AudioStreamManager:
         max_consecutive_timeouts: int = 2,
         use_streamlink: bool = True,
         direct_url: str | None = None,
+        url_refresher: Callable[[], Awaitable[str | None]] | None = None,
     ) -> None:
         self.stream_url = stream_url.strip()
         self.direct_url = direct_url.strip() if direct_url else None
+        self.url_refresher = url_refresher
         self.chunk_duration_seconds = chunk_duration_seconds
         self.sample_rate = sample_rate
         self.channels = channels
@@ -177,20 +180,34 @@ class AudioStreamManager:
             "--stdout",
             "--loglevel",
             "warning",
+            "--retry-streams",
+            "15",
+            "--retry-max",
+            "3",
+            "--retry-open",
+            "3",
             "--ringbuffer-size",
             "64M",
             "--stream-segment-attempts",
             "5",
             "--stream-segment-threads",
-            "3",
+            "1",
             "--stream-segment-timeout",
-            "15",
+            "20",
+            "--hls-live-edge",
+            "6",
             "--hls-playlist-reload-attempts",
-            "5",
+            "10",
+            "--hls-playlist-reload-time",
+            "segment",
+            "--stream-segmented-queue-deadline",
+            "0",
             "--stream-timeout",
-            "60",
+            "120",
+            "--http-timeout",
+            "30.0",
             target,
-            "best",
+            "audio_only,worst",
         ]
 
     def _build_ffmpeg_command(self, *, input_from_stdin: bool = False) -> list[str]:
@@ -339,6 +356,51 @@ class AudioStreamManager:
 
         self._start_direct_ffmpeg()
 
+    @staticmethod
+    def _enqueue_with_backpressure(
+        queue: Any,
+        item: bytes | None,
+        loop: asyncio.AbstractEventLoop,
+        stop_event: threading.Event,
+        poll_timeout_seconds: float = 0.05,
+    ) -> bool:
+        """Bounded, shutdown-aware cross-thread enqueue that waits for queue capacity."""
+        if stop_event.is_set() or queue is None or loop.is_closed():
+            return False
+
+        async def _put_coro() -> None:
+            res = queue.put(item)
+            if asyncio.iscoroutine(res):
+                await res
+
+        try:
+            future = asyncio.run_coroutine_threadsafe(_put_coro(), loop)
+        except RuntimeError:
+            return False
+
+        while not stop_event.is_set():
+            try:
+                future.result(timeout=poll_timeout_seconds)
+                return True
+            except concurrent.futures.TimeoutError:
+                continue
+            except concurrent.futures.CancelledError:
+                return False
+            except Exception as exc:  # noqa: BLE001 - queue/event-loop boundary
+                logger.debug("Audio queue enqueue failed: %s", exc)
+                return False
+
+        future.cancel()
+        try:
+            future.result(timeout=poll_timeout_seconds)
+        except concurrent.futures.CancelledError:
+            pass
+        except concurrent.futures.TimeoutError:
+            logger.debug("Timed out waiting for cancelled audio queue enqueue.")
+        except Exception as exc:  # noqa: BLE001 - queue/event-loop boundary
+            logger.debug("Cancelled audio queue enqueue ended with error: %s", exc)
+        return False
+
     def _start_reader_thread(self, loop: asyncio.AbstractEventLoop) -> None:
         """Start background stdout reader thread."""
         self._reader_stop_event.clear()
@@ -361,14 +423,19 @@ class AudioStreamManager:
                         raw += part
 
                     if raw and not stop_event.is_set() and queue is not None:
-                        loop.call_soon_threadsafe(queue.put_nowait, raw)
+                        if not self._enqueue_with_backpressure(
+                            queue, raw, loop, stop_event
+                        ):
+                            break
                     elif not raw:
                         break
             except Exception as e:  # noqa: BLE001 - reader thread error boundary
                 logger.debug("Reader thread exited: %s", e)
             finally:
                 if not stop_event.is_set() and queue is not None:
-                    loop.call_soon_threadsafe(queue.put_nowait, None)
+                    self._enqueue_with_backpressure(
+                        queue, None, loop, stop_event
+                    )
 
         self._thread = threading.Thread(target=_reader, daemon=True)
         self._thread.start()
@@ -426,6 +493,17 @@ class AudioStreamManager:
         logger.warning(
             "Stopping Streamlink pipeline and attempting direct FFmpeg fallback..."
         )
+
+        if self.url_refresher is not None:
+            try:
+                refreshed_url = await self.url_refresher()
+                if refreshed_url and isinstance(refreshed_url, str) and refreshed_url.strip():
+                    self.direct_url = refreshed_url.strip()
+                    logger.info("Direct FFmpeg media URL refreshed successfully.")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Direct URL refresh failed (%s); retaining cached URL.", exc
+                )
 
         # Stop active processes and reader thread
         await asyncio.to_thread(self._stop_active_processes_sync)

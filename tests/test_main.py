@@ -675,6 +675,32 @@ class TestTradeMonitoringService(unittest.IsolatedAsyncioTestCase):
             "https://manifest.googlevideo.com/hls_live/stream.m3u8",
         )
         self.assertIn("stream_url", call_kwargs)
+        url_refresher = call_kwargs.get("url_refresher")
+        self.assertIsNotNone(url_refresher)
+
+        # Refresher returns URL only for explicit LIVE status
+        mock_check_live.return_value = (
+            StreamStatus.LIVE,
+            "https://manifest.googlevideo.com/hls_live/refreshed.m3u8",
+        )
+        self.assertEqual(
+            await url_refresher(),
+            "https://manifest.googlevideo.com/hls_live/refreshed.m3u8",
+        )
+
+        # OFFLINE returns None
+        mock_check_live.return_value = (StreamStatus.OFFLINE, None)
+        self.assertIsNone(await url_refresher())
+
+        # UNKNOWN returns None
+        mock_check_live.return_value = (StreamStatus.UNKNOWN, None)
+        self.assertIsNone(await url_refresher())
+
+        # LIVE with empty/None URL returns None
+        mock_check_live.return_value = (StreamStatus.LIVE, None)
+        self.assertIsNone(await url_refresher())
+        mock_check_live.return_value = (StreamStatus.LIVE, "")
+        self.assertIsNone(await url_refresher())
 
     @patch(
         "src.notifier.TelegramNotifier.send_fast_audio_trade_alert",

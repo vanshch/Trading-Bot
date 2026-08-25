@@ -173,10 +173,17 @@ class TradeMonitoringService:
                     else (channel.url or direct_url)
                 )
 
+                async def refresh_direct_url() -> str | None:
+                    status, refreshed_url = await stream_mgr.check_live_status()
+                    if status == StreamStatus.LIVE and refreshed_url:
+                        return refreshed_url
+                    return None
+
                 audio_mgr = AudioStreamManager(
                     stream_url=audio_input_url,
                     direct_url=direct_url,
                     chunk_duration_seconds=chunk_duration,
+                    url_refresher=refresh_direct_url,
                 )
                 self._audio_stream_managers.append(audio_mgr)
 
