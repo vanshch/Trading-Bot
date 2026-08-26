@@ -101,6 +101,7 @@ class TestConfigValidation(unittest.TestCase):
 
     def test_current_default_audio_stt_config(self) -> None:
         from src.config import AudioSTTConfig
+
         audio_cfg = AudioSTTConfig()
         self.assertEqual(audio_cfg.model, "whisper-large-v3")
         self.assertEqual(audio_cfg.temperature, 0.0)
@@ -123,6 +124,22 @@ class TestConfigValidation(unittest.TestCase):
                 restart_initial_delay_seconds=5.0,
                 restart_max_delay_seconds=2.0,
             )
+
+    def test_capture_provider_rate_limit_cooldown_setting(self) -> None:
+        # Default is 120.0 seconds
+        default_cfg = CaptureConfig()
+        self.assertEqual(default_cfg.provider_rate_limit_cooldown_seconds, 120.0)
+
+        # Valid positive custom cooldown
+        custom_cfg = CaptureConfig(provider_rate_limit_cooldown_seconds=45.0)
+        self.assertEqual(custom_cfg.provider_rate_limit_cooldown_seconds, 45.0)
+
+        # Reject zero or negative cooldown
+        with self.assertRaises(ValidationError):
+            CaptureConfig(provider_rate_limit_cooldown_seconds=0.0)
+
+        with self.assertRaises(ValidationError):
+            CaptureConfig(provider_rate_limit_cooldown_seconds=-10.0)
 
     def test_valid_roi_crop(self) -> None:
         roi = ROICropConfig(top=0.1, bottom=0.9, left=0.2, right=0.8)
@@ -198,9 +215,7 @@ class TestLoadConfig(unittest.TestCase):
         self.assertEqual(len(config.channels), 1)
         self.assertEqual(config.channels[0].name, "Trader Test")
         self.assertEqual(config.capture.frame_interval_seconds, 3.0)
-        self.assertEqual(
-            config.groq_api_key.get_secret_value(), "test_groq_key_12345"
-        )
+        self.assertEqual(config.groq_api_key.get_secret_value(), "test_groq_key_12345")
         self.assertEqual(
             config.gemini_api_key.get_secret_value(), "test_gemini_key_12345"
         )
@@ -329,7 +344,9 @@ class TestLoadConfig(unittest.TestCase):
         with open(self.env_path, "w", encoding="utf-8") as f:
             f.write("GROQ_API_KEY=test_groq_key_12345\n")
             f.write("GEMINI_API_KEY=test_gemini_key_12345\n")
-            f.write("TELEGRAM_BOT_TOKEN=123456789:ABCDefGhIjKlMnOpQrStUvWxYz_12345678\n")
+            f.write(
+                "TELEGRAM_BOT_TOKEN=123456789:ABCDefGhIjKlMnOpQrStUvWxYz_12345678\n"
+            )
             f.write("TELEGRAM_CHAT_ID=987654321\n")
 
         config = load_config(yaml_path=mixed_config_path, env_path=self.env_path)
@@ -378,9 +395,7 @@ class TestLoadConfig(unittest.TestCase):
         naresh = ChannelConfig.model_validate(channels_by_name["Naresh Cool Trader"])
         self.assertTrue(naresh.enabled)
         self.assertEqual(naresh.mode, ChannelMode.NOTIFICATIONS_ONLY)
-        self.assertEqual(
-            naresh.url, "https://www.youtube.com/@NareshCoolTrader/live"
-        )
+        self.assertEqual(naresh.url, "https://www.youtube.com/@NareshCoolTrader/live")
         self.assertGreater(len(naresh.trigger_keywords), 0)
         self.assertIsNotNone(naresh.trader_profile)
 

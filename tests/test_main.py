@@ -11,6 +11,7 @@ import numpy as np
 from pydantic import SecretStr
 
 from main import TradeMonitoringService, async_main, parse_args
+from src.audio_stream import CaptureFailureReason
 from src.config import (
     AIConfig,
     AppConfig,
@@ -727,32 +728,225 @@ class TestTradeMonitoringService(unittest.IsolatedAsyncioTestCase):
             "https://manifest.googlevideo.com/hls_live/stream.m3u8",
         )
         self.assertIn("stream_url", call_kwargs)
-        url_refresher = call_kwargs.get("url_refresher")
-        self.assertIsNotNone(url_refresher)
+        self.assertNotIn("url_refresher", call_kwargs)
 
-        # Refresher returns URL only for explicit LIVE status
+    @patch("main.AudioStreamManager")
+    @patch("src.stream_manager.StreamManager.check_live_status", new_callable=AsyncMock)
+    async def test_no_resolver_called_during_active_capture(
+        self,
+        mock_check_live: AsyncMock,
+        mock_audio_mgr_class: MagicMock,
+    ) -> None:
+        """Resolver is not called between capture start and pipeline shutdown."""
         mock_check_live.return_value = (
             StreamStatus.LIVE,
-            "https://manifest.googlevideo.com/hls_live/refreshed.m3u8",
+            "https://manifest.googlevideo.com/hls_live/stream.m3u8",
         )
-        self.assertEqual(
-            await url_refresher(),
-            "https://manifest.googlevideo.com/hls_live/refreshed.m3u8",
+        mock_audio_mgr = MagicMock()
+        mock_audio_mgr.bytes_per_second = 32000
+        mock_audio_mgr.audio_seconds_delivered = 5.0
+        mock_audio_mgr.failure_reason = CaptureFailureReason.NONE
+
+        chunk_yielded = asyncio.Event()
+
+        async def stream_chunks(stop_event=None):
+            chunk_yielded.set()
+            yield b"\x00" * 32000
+            if stop_event:
+                await stop_event.wait()
+
+        mock_audio_mgr.stream_audio_chunks = stream_chunks
+        mock_audio_mgr.stop = AsyncMock()
+        mock_audio_mgr_class.return_value = mock_audio_mgr
+
+        channel = self.config.channels[0]
+        channel.url = "https://www.youtube.com/@LiveTrader/live"
+
+        monitor_task = asyncio.create_task(self.service.monitor_channel(channel))
+        await asyncio.wait_for(chunk_yielded.wait(), timeout=1.0)
+
+        # At this point, stream is actively yielding chunks. Exactly ONE resolver check was made initially.
+        self.assertEqual(mock_check_live.call_count, 1)
+
+        self.service.stop()
+        await asyncio.wait_for(monitor_task, timeout=1.0)
+        # Pipeline stopped gracefully; no intermediate resolver was invoked while running
+        self.assertEqual(mock_check_live.call_count, 1)
+
+    @patch("main.AudioStreamManager")
+    @patch("src.stream_manager.StreamManager.check_live_status", new_callable=AsyncMock)
+    @patch(
+        "src.audio_transcriber.AudioTranscriber.transcribe_pcm_chunk",
+        new_callable=AsyncMock,
+    )
+    async def test_capture_stops_before_session_boundary_resolution(
+        self,
+        mock_transcribe: AsyncMock,
+        mock_check_live: AsyncMock,
+        mock_audio_mgr_class: MagicMock,
+    ) -> None:
+        """A consumer failure cannot overlap active capture with yt-dlp resolution."""
+        capture_stopped = asyncio.Event()
+
+        async def tracked_check_live(*args, **kwargs):
+            if mock_check_live.call_count == 1:
+                return (
+                    StreamStatus.LIVE,
+                    "https://manifest.googlevideo.com/live.m3u8",
+                )
+            self.assertTrue(capture_stopped.is_set())
+            self.service.stop()
+            return (StreamStatus.OFFLINE, None)
+
+        mock_check_live.side_effect = tracked_check_live
+        mock_transcribe.side_effect = RuntimeError("transcriber unavailable")
+
+        mock_audio_mgr = MagicMock()
+        mock_audio_mgr.bytes_per_second = 32000
+        mock_audio_mgr.audio_seconds_delivered = 1.0
+        mock_audio_mgr.failure_reason = CaptureFailureReason.NONE
+
+        async def one_chunk(stop_event=None):
+            yield b"\x00" * 32000
+
+        async def stop_capture() -> None:
+            capture_stopped.set()
+
+        mock_audio_mgr.stream_audio_chunks = one_chunk
+        mock_audio_mgr.stop = AsyncMock(side_effect=stop_capture)
+        mock_audio_mgr_class.return_value = mock_audio_mgr
+
+        monitor_task = asyncio.create_task(
+            self.service.monitor_channel(self.config.channels[0])
         )
+        await asyncio.wait_for(monitor_task, timeout=1.0)
 
-        # OFFLINE returns None
-        mock_check_live.return_value = (StreamStatus.OFFLINE, None)
-        self.assertIsNone(await url_refresher())
+        self.assertEqual(mock_check_live.call_count, 2)
+        mock_audio_mgr.stop.assert_awaited()
 
-        # UNKNOWN returns None
-        mock_check_live.return_value = (StreamStatus.UNKNOWN, None)
-        self.assertIsNone(await url_refresher())
+    @patch("main.AudioStreamManager")
+    @patch("src.stream_manager.StreamManager.check_live_status", new_callable=AsyncMock)
+    async def test_provider_rate_limit_429_skips_immediate_resolver_and_waits_cooldown(
+        self,
+        mock_check_live: AsyncMock,
+        mock_audio_mgr_class: MagicMock,
+    ) -> None:
+        """On 429, immediate resolver is skipped, cooldown is waited, then exactly one status check runs."""
+        cooldown_entered = asyncio.Event()
+        release_cooldown = asyncio.Event()
+        post_cooldown_resolved = asyncio.Event()
 
-        # LIVE with empty/None URL returns None
-        mock_check_live.return_value = (StreamStatus.LIVE, None)
-        self.assertIsNone(await url_refresher())
-        mock_check_live.return_value = (StreamStatus.LIVE, "")
-        self.assertIsNone(await url_refresher())
+        call_idx = 0
+
+        async def tracked_check_live(*args, **kwargs):
+            nonlocal call_idx
+            call_idx += 1
+            if call_idx == 1:
+                return (StreamStatus.LIVE, "https://manifest.googlevideo.com/live.m3u8")
+            if call_idx == 2:
+                post_cooldown_resolved.set()
+                return (StreamStatus.OFFLINE, None)
+            return (StreamStatus.OFFLINE, None)
+
+        mock_check_live.side_effect = tracked_check_live
+
+        mock_audio_mgr = MagicMock()
+        mock_audio_mgr.bytes_per_second = 32000
+        mock_audio_mgr.audio_seconds_delivered = 0.0
+        mock_audio_mgr.failure_reason = CaptureFailureReason.PROVIDER_RATE_LIMIT
+
+        async def empty_stream(stop_event=None):
+            return
+            yield b""
+
+        mock_audio_mgr.stream_audio_chunks = empty_stream
+        mock_audio_mgr.stop = AsyncMock()
+        mock_audio_mgr_class.return_value = mock_audio_mgr
+
+        channel = self.config.channels[0]
+        channel.url = "https://www.youtube.com/@LiveTrader/live"
+        self.config.capture.live_poll_interval_seconds = 60.0
+
+        async def mock_wait_cooldown(
+            min_cooldown_seconds=0.0, stop_event=None, jitter_fn=None
+        ):
+            self.assertGreaterEqual(min_cooldown_seconds, 120.0)
+            cooldown_entered.set()
+            await release_cooldown.wait()
+            return min_cooldown_seconds
+
+        with patch(
+            "src.audio_stream.RestartBackoffTracker.wait_cooldown",
+            side_effect=mock_wait_cooldown,
+        ):
+            monitor_task = asyncio.create_task(self.service.monitor_channel(channel))
+            await asyncio.wait_for(cooldown_entered.wait(), timeout=1.0)
+            # Exactly 1 initial check before cooldown; no immediate check on 429 interruption
+            self.assertEqual(mock_check_live.call_count, 1)
+
+            # Release cooldown; exactly one resolution executes after cooldown
+            release_cooldown.set()
+            await asyncio.wait_for(post_cooldown_resolved.wait(), timeout=1.0)
+            await asyncio.sleep(0.05)
+            self.assertEqual(mock_check_live.call_count, 2)
+            self.service.stop()
+            await asyncio.wait_for(monitor_task, timeout=1.0)
+
+    @patch("main.AudioStreamManager")
+    @patch("src.stream_manager.StreamManager.check_live_status", new_callable=AsyncMock)
+    async def test_provider_rate_limit_shutdown_cancels_cooldown_promptly(
+        self,
+        mock_check_live: AsyncMock,
+        mock_audio_mgr_class: MagicMock,
+    ) -> None:
+        """Service shutdown immediately cancels rate limit cooldown wait."""
+        mock_check_live.return_value = (
+            StreamStatus.LIVE,
+            "https://manifest.googlevideo.com/live.m3u8",
+        )
+        mock_audio_mgr = MagicMock()
+        mock_audio_mgr.bytes_per_second = 32000
+        mock_audio_mgr.audio_seconds_delivered = 0.0
+        mock_audio_mgr.failure_reason = CaptureFailureReason.PROVIDER_RATE_LIMIT
+
+        async def empty_stream(stop_event=None):
+            return
+            yield b""
+
+        mock_audio_mgr.stream_audio_chunks = empty_stream
+        mock_audio_mgr.stop = AsyncMock()
+        mock_audio_mgr_class.return_value = mock_audio_mgr
+
+        channel = self.config.channels[0]
+        channel.url = "https://www.youtube.com/@LiveTrader/live"
+
+        cooldown_entered = asyncio.Event()
+
+        async def wait_for_stop(
+            min_cooldown_seconds=0.0, stop_event=None, jitter_fn=None
+        ):
+            self.assertEqual(min_cooldown_seconds, 120.0)
+            cooldown_entered.set()
+            await stop_event.wait()
+            return min_cooldown_seconds
+
+        with patch(
+            "src.audio_stream.RestartBackoffTracker.wait_cooldown",
+            side_effect=wait_for_stop,
+        ):
+            monitor_task = asyncio.create_task(self.service.monitor_channel(channel))
+            await asyncio.wait_for(cooldown_entered.wait(), timeout=1.0)
+            self.assertEqual(mock_check_live.call_count, 1)
+
+            t0 = time.time()
+            self.service.stop()
+            await asyncio.wait_for(monitor_task, timeout=1.0)
+            elapsed = time.time() - t0
+
+        # Must cancel promptly (far less than 120s cooldown)
+        self.assertLess(elapsed, 0.5)
+        # And after cancellation during cooldown, no post-cooldown resolver was called
+        self.assertEqual(mock_check_live.call_count, 1)
 
     @patch(
         "src.notifier.TelegramNotifier.send_fast_audio_trade_alert",
@@ -870,9 +1064,12 @@ class TestTradeMonitoringService(unittest.IsolatedAsyncioTestCase):
             yield b"\x00\x00" * 80000
 
         mock_stream_chunks.side_effect = fake_audio_generator
-        mock_transcribe.return_value = "You can enter with one lot. I am taking a small scalp."
+        mock_transcribe.return_value = (
+            "You can enter with one lot. I am taking a small scalp."
+        )
 
         from src.multimodal_verifier import MultimodalTradeVerification
+
         mock_multimodal.return_value = MultimodalTradeVerification(
             signal_type="ENTRY",
             is_trade_active=True,
@@ -941,6 +1138,7 @@ class TestTradeMonitoringService(unittest.IsolatedAsyncioTestCase):
         mock_transcribe.return_value = "Book some profit and move SL to CTC."
 
         from src.multimodal_verifier import MultimodalTradeVerification
+
         mock_multimodal.return_value = MultimodalTradeVerification(
             signal_type="PARTIAL_EXIT",
             is_trade_active=True,
@@ -1014,6 +1212,7 @@ class TestTradeMonitoringService(unittest.IsolatedAsyncioTestCase):
         mock_transcribe.return_value = "My remaining trade is closed/cut."
 
         from src.multimodal_verifier import MultimodalTradeVerification
+
         mock_multimodal.return_value = MultimodalTradeVerification(
             signal_type="EXIT",
             is_trade_active=False,
@@ -1031,14 +1230,19 @@ class TestTradeMonitoringService(unittest.IsolatedAsyncioTestCase):
 
         monitor_task = asyncio.create_task(self.service.monitor_channel(channel))
         for _ in range(50):
-            if mock_send_mgmt_alert.call_count >= 1 or mock_send_closed_alert.call_count >= 1:
+            if (
+                mock_send_mgmt_alert.call_count >= 1
+                or mock_send_closed_alert.call_count >= 1
+            ):
                 break
             await asyncio.sleep(0.02)
 
         self.service.stop()
         await asyncio.wait_for(monitor_task, timeout=1.0)
 
-        total_exit_alerts = mock_send_mgmt_alert.call_count + mock_send_closed_alert.call_count
+        total_exit_alerts = (
+            mock_send_mgmt_alert.call_count + mock_send_closed_alert.call_count
+        )
         self.assertEqual(total_exit_alerts, 1)
 
     @patch(
@@ -1085,6 +1289,7 @@ class TestTradeMonitoringService(unittest.IsolatedAsyncioTestCase):
         mock_transcribe.return_value = "If 37 level breaks we can enter call."
 
         from src.multimodal_verifier import MultimodalTradeVerification
+
         mock_multimodal.return_value = MultimodalTradeVerification(
             signal_type="NONE",
             is_trade_active=False,
@@ -1105,7 +1310,6 @@ class TestTradeMonitoringService(unittest.IsolatedAsyncioTestCase):
 
         mock_send_trade_alert.assert_not_called()
         mock_send_mgmt_alert.assert_not_called()
-
 
 
 class TestCLITestModeValidation(unittest.TestCase):

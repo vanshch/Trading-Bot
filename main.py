@@ -12,7 +12,12 @@ import time
 
 import cv2
 
-from src.audio_stream import AudioStreamManager, RestartBackoffTracker
+from src.audio_stream import (
+    AudioStreamManager,
+    CaptureFailureReason,
+    RestartBackoffTracker,
+    sanitize_diagnostic,
+)
 from src.audio_transcriber import AudioTranscriber
 from src.audio_trigger import AudioTriggerDetector, RollingTranscriptBuffer
 from src.config import (
@@ -88,6 +93,20 @@ class TradeMonitoringService:
         stream_mgr = StreamManager(channel_url=channel.url, config=self.config.capture)
         self._stream_managers.append(stream_mgr)
 
+        async def handle_confirmed_offline(active_logger) -> None:
+            """Apply the existing trade-closure behavior for an explicit offline state."""
+            transition, trade_info = self.state_tracker.process_verification(
+                channel.name,
+                TradeVerification(
+                    is_trade_active=False,
+                    direction="NONE",
+                    reasoning="Stream went offline",
+                ),
+            )
+            if transition == StateTransition.TRADE_CLOSED and trade_info:
+                active_logger.info("Active trade concluded as stream ended.")
+                await self.notifier.send_trade_closed_alert(trade_info, channel.url)
+
         poll_interval = self.config.capture.live_poll_interval_seconds
         chunk_duration = self.config.audio.chunk_duration_seconds
         context_buffer = RollingTranscriptBuffer(
@@ -122,26 +141,7 @@ class TradeMonitoringService:
                     if stream_status != StreamStatus.LIVE or not resolved_stream_url:
                         if stream_status == StreamStatus.OFFLINE:
                             # Only an explicit offline result may advance trade closure.
-                            transition, trade_info = (
-                                self.state_tracker.process_verification(
-                                    channel.name,
-                                    TradeVerification(
-                                        is_trade_active=False,
-                                        direction="NONE",
-                                        reasoning="Stream went offline",
-                                    ),
-                                )
-                            )
-                            if (
-                                transition == StateTransition.TRADE_CLOSED
-                                and trade_info
-                            ):
-                                ch_logger.info(
-                                    "Active trade concluded as stream ended."
-                                )
-                                await self.notifier.send_trade_closed_alert(
-                                    trade_info, channel.url
-                                )
+                            await handle_confirmed_offline(ch_logger)
                         else:
                             ch_logger.debug(
                                 "Live status is temporarily unknown; preserving "
@@ -173,17 +173,10 @@ class TradeMonitoringService:
                     else (channel.url or direct_url)
                 )
 
-                async def refresh_direct_url() -> str | None:
-                    status, refreshed_url = await stream_mgr.check_live_status()
-                    if status == StreamStatus.LIVE and refreshed_url:
-                        return refreshed_url
-                    return None
-
                 audio_mgr = AudioStreamManager(
                     stream_url=audio_input_url,
                     direct_url=direct_url,
                     chunk_duration_seconds=chunk_duration,
-                    url_refresher=refresh_direct_url,
                 )
                 self._audio_stream_managers.append(audio_mgr)
 
@@ -198,6 +191,7 @@ class TradeMonitoringService:
 
                 session_status = "INTERRUPTED"
                 session_error: str | None = None
+                session_cancelled = False
                 try:
                     async for audio_chunk in audio_mgr.stream_audio_chunks(
                         stop_event=self._stop_event
@@ -205,7 +199,12 @@ class TradeMonitoringService:
                         if self._stop_event.is_set():
                             break
 
-                        self.session_logger.record_chunk(session_rec.session_id)
+                        self.session_logger.record_chunk(
+                            session_rec.session_id,
+                            count=1,
+                            pcm_bytes=len(audio_chunk),
+                            bytes_per_second=audio_mgr.bytes_per_second,
+                        )
 
                         # Transcribe in memory (ultra-fast Groq Whisper inference)
                         text = await self.transcriber.transcribe_pcm_chunk(audio_chunk)
@@ -289,8 +288,7 @@ class TradeMonitoringService:
                                 )
 
                                 broadcast_ref = (
-                                    stream_mgr.broadcast_start_time
-                                    or stream_start_time
+                                    stream_mgr.broadcast_start_time or stream_start_time
                                 )
                                 elapsed_stream_sec = max(
                                     0.0, time.time() - broadcast_ref
@@ -328,12 +326,14 @@ class TradeMonitoringService:
                                         ch_logger.info(
                                             f"DISPATCHING MANAGEMENT ALERT ({signal_type}) for {channel.name}"
                                         )
-                                        alert_sent = await self.notifier.send_management_alert(
-                                            channel_name=channel.name,
-                                            verification=verification,
-                                            stream_url=channel.url,
-                                            frame_bytes=frame_jpeg_bytes,
-                                            elapsed_seconds=elapsed_stream_sec,
+                                        alert_sent = (
+                                            await self.notifier.send_management_alert(
+                                                channel_name=channel.name,
+                                                verification=verification,
+                                                stream_url=channel.url,
+                                                frame_bytes=frame_jpeg_bytes,
+                                                elapsed_seconds=elapsed_stream_sec,
+                                            )
                                         )
                                         self.session_logger.record_management(
                                             session_rec.session_id, alerted=alert_sent
@@ -352,12 +352,14 @@ class TradeMonitoringService:
                                         ch_logger.info(
                                             f"DISPATCHING TRADE CLOSED / EXIT ALERT for {channel.name}"
                                         )
-                                        alert_sent = await self.notifier.send_management_alert(
-                                            channel_name=channel.name,
-                                            verification=verification,
-                                            stream_url=channel.url,
-                                            frame_bytes=frame_jpeg_bytes,
-                                            elapsed_seconds=elapsed_stream_sec,
+                                        alert_sent = (
+                                            await self.notifier.send_management_alert(
+                                                channel_name=channel.name,
+                                                verification=verification,
+                                                stream_url=channel.url,
+                                                frame_bytes=frame_jpeg_bytes,
+                                                elapsed_seconds=elapsed_stream_sec,
+                                            )
                                         )
                                         self.session_logger.record_management(
                                             session_rec.session_id, alerted=alert_sent
@@ -383,46 +385,109 @@ class TradeMonitoringService:
                                         )
 
                 except asyncio.CancelledError:
+                    session_cancelled = True
                     session_error = "Monitoring task cancelled"
                     raise
                 except Exception as exc:  # noqa: BLE001 - stream/provider boundary
-                    session_error = str(exc)
-                    ch_logger.warning(
-                        f"Audio stream interrupted: {exc}. Re-verifying stream..."
-                    )
-                    if not self._stop_event.is_set():
-                        await stream_mgr.check_live_status()
+                    session_error = sanitize_diagnostic(str(exc))
+                    ch_logger.warning(f"Audio stream interrupted: {session_error}")
                 else:
                     if self._stop_event.is_set():
                         session_error = "Monitoring service stopped"
-                    else:
+                finally:
+                    # The capture pipeline must be fully stopped before any yt-dlp
+                    # status resolution begins. This also lets stderr drain threads
+                    # publish their final structured failure reason.
+                    capture_end_time = time.time()
+                    await audio_mgr.stop()
+                    if audio_mgr in self._audio_stream_managers:
+                        self._audio_stream_managers.remove(audio_mgr)
+
+                    session_duration = max(0.0, capture_end_time - stream_start_time)
+                    is_rate_limited = (
+                        audio_mgr.failure_reason
+                        == CaptureFailureReason.PROVIDER_RATE_LIMIT
+                    )
+
+                    if is_rate_limited:
+                        session_status = "INTERRUPTED"
+                        session_error = "Provider rate limit (HTTP 429)"
+                        ch_logger.warning(
+                            "Audio capture encountered provider rate limit (HTTP 429). "
+                            "Skipping immediate status re-resolution."
+                        )
+                    elif not self._stop_event.is_set() and not session_cancelled:
                         stream_status, _ = await stream_mgr.check_live_status()
                         if stream_status == StreamStatus.LIVE:
                             session_error = (
-                                "Audio stream ended while channel was still live"
+                                session_error
+                                or "Audio stream ended while channel was still live"
                             )
                         elif stream_status == StreamStatus.OFFLINE:
                             session_status = "COMPLETED"
+                            await handle_confirmed_offline(ch_logger)
                         else:
-                            session_error = "Audio stream ended while live status was temporarily unknown"
-                finally:
-                    session_duration = max(0.0, time.time() - stream_start_time)
+                            session_error = (
+                                session_error
+                                or "Audio stream ended while live status was temporarily unknown"
+                            )
+
                     backoff_tracker.record_session(session_duration, session_status)
                     self.session_logger.end_session(
                         session_rec.session_id,
                         status=session_status,
                         error=session_error,
+                        audio_seconds_captured=audio_mgr.audio_seconds_delivered,
+                        duration_seconds=session_duration,
                     )
-                    await audio_mgr.stop()
-                    if audio_mgr in self._audio_stream_managers:
-                        self._audio_stream_managers.remove(audio_mgr)
 
                 if session_status == "INTERRUPTED" and not self._stop_event.is_set():
-                    ch_logger.info(
-                        f"Audio capture session interrupted after {session_duration:.1f}s. "
-                        f"Backing off before restart (delay: {backoff_tracker.current_delay_seconds:.1f}s)..."
-                    )
-                    await backoff_tracker.wait(stop_event=self._stop_event)
+                    if is_rate_limited:
+                        cooldown = (
+                            self.config.capture.provider_rate_limit_cooldown_seconds
+                        )
+                        ch_logger.warning(
+                            f"Audio capture encountered provider rate limit. Waiting for cooldown "
+                            f"({cooldown:.1f}s) before re-resolving stream..."
+                        )
+                        await backoff_tracker.wait_cooldown(
+                            min_cooldown_seconds=cooldown,
+                            stop_event=self._stop_event,
+                        )
+                        if not self._stop_event.is_set():
+                            ch_logger.info(
+                                "Re-checking live status after rate-limit cooldown..."
+                            )
+                            status, resolved_url = await stream_mgr.check_live_status()
+                            if status == StreamStatus.LIVE and resolved_url:
+                                stream_url = resolved_url
+                            elif status == StreamStatus.OFFLINE:
+                                await handle_confirmed_offline(ch_logger)
+                                # The post-cooldown check already established that
+                                # the channel is offline. Resume normal offline
+                                # polling only after its configured interval instead
+                                # of resolving it a second time immediately.
+                                try:
+                                    await asyncio.wait_for(
+                                        self._stop_event.wait(), timeout=poll_interval
+                                    )
+                                except asyncio.TimeoutError:
+                                    pass
+                    else:
+                        ch_logger.info(
+                            f"Audio capture session interrupted after {session_duration:.1f}s. "
+                            f"Backing off before restart (delay: {backoff_tracker.current_delay_seconds:.1f}s)..."
+                        )
+                        await backoff_tracker.wait(stop_event=self._stop_event)
+                elif session_status == "COMPLETED" and not self._stop_event.is_set():
+                    # The session-boundary resolver already confirmed offline.
+                    # Avoid an immediate duplicate resolver call on the next loop.
+                    try:
+                        await asyncio.wait_for(
+                            self._stop_event.wait(), timeout=poll_interval
+                        )
+                    except asyncio.TimeoutError:
+                        pass
 
         except asyncio.CancelledError:
             ch_logger.info("Channel monitor task cancelled.")

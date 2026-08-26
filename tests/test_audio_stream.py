@@ -10,8 +10,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.audio_stream import (
     AudioStreamManager,
+    CaptureFailureReason,
     RestartBackoffTracker,
     format_diagnostic_tail,
+    is_rate_limit_diagnostic,
     sanitize_diagnostic,
 )
 from src.logger import register_secret_for_redaction
@@ -78,11 +80,23 @@ class TestAudioStreamManager(unittest.IsolatedAsyncioTestCase):
         """Verify URL prefixing behavior across YouTube, youtu.be, Twitch, and raw HLS URLs."""
         test_cases = [
             ("https://youtu.be/sample456", "https://youtu.be/sample456", False),
-            ("https://www.youtube.com/channel/UC12345", "https://www.youtube.com/channel/UC12345", False),
+            (
+                "https://www.youtube.com/channel/UC12345",
+                "https://www.youtube.com/channel/UC12345",
+                False,
+            ),
             ("https://twitch.tv/liveuser", "https://twitch.tv/liveuser", False),
             ("https://www.twitch.tv/liveuser", "https://www.twitch.tv/liveuser", False),
-            ("hls://https://custom.stream/live.m3u8", "hls://https://custom.stream/live.m3u8", False),
-            ("https://custom.stream/live.m3u8", "hls://https://custom.stream/live.m3u8", True),
+            (
+                "hls://https://custom.stream/live.m3u8",
+                "hls://https://custom.stream/live.m3u8",
+                False,
+            ),
+            (
+                "https://custom.stream/live.m3u8",
+                "hls://https://custom.stream/live.m3u8",
+                True,
+            ),
         ]
         for input_url, expected_target, was_prefixed in test_cases:
             mgr = AudioStreamManager(input_url)
@@ -331,10 +345,10 @@ class TestAudioStreamManager(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(chunks), 1)
         self.assertEqual(chunks[0], chunk2)
 
-    async def test_runtime_eof_refreshes_direct_url_before_fallback_ffmpeg_starts(
+    async def test_runtime_eof_uses_initial_direct_url_without_resolver(
         self,
     ) -> None:
-        """Streamlink EOF awaits URL refresher and fallback FFmpeg uses the refreshed URL."""
+        """Streamlink EOF falls back to direct FFmpeg using the initial cached direct URL without resolver."""
         chunk1 = b"\x01\x02" * 80000
         chunk2 = b"\x03\x04" * 80000
 
@@ -355,15 +369,10 @@ class TestAudioStreamManager(unittest.IsolatedAsyncioTestCase):
         ff_proc2.stderr.readline.return_value = b""
         ff_proc2.stdout.read.side_effect = [chunk2, b""]
 
-        url_refresher = AsyncMock(
-            return_value="https://manifest.googlevideo.com/refreshed_live_eof.m3u8"
-        )
-
         manager = AudioStreamManager(
             stream_url="https://www.youtube.com/watch?v=sample123",
-            direct_url="https://manifest.googlevideo.com/stale_initial.m3u8",
+            direct_url="https://manifest.googlevideo.com/initial_cached.m3u8",
             chunk_duration_seconds=5.0,
-            url_refresher=url_refresher,
         )
 
         with patch(
@@ -376,22 +385,20 @@ class TestAudioStreamManager(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(collected_chunks[0], chunk1)
         self.assertEqual(collected_chunks[1], chunk2)
 
-        # Refresher was called exactly once
-        url_refresher.assert_awaited_once()
-
-        # Fallback FFmpeg used the refreshed URL, not the stale initial URL
+        # Fallback FFmpeg used the cached direct URL directly without calling any resolver
         fallback_cmd = popen.call_args_list[2].args[0]
         self.assertIn(
-            "https://manifest.googlevideo.com/refreshed_live_eof.m3u8",
+            "https://manifest.googlevideo.com/initial_cached.m3u8",
             fallback_cmd,
         )
-        self.assertNotIn("https://manifest.googlevideo.com/stale_initial.m3u8", fallback_cmd)
-        self.assertEqual(manager.direct_url, "https://manifest.googlevideo.com/refreshed_live_eof.m3u8")
+        self.assertEqual(
+            manager.direct_url, "https://manifest.googlevideo.com/initial_cached.m3u8"
+        )
 
-    async def test_runtime_stall_refreshes_direct_url_before_fallback_ffmpeg_starts(
+    async def test_runtime_stall_uses_initial_direct_url_without_resolver(
         self,
     ) -> None:
-        """Streamlink stall awaits URL refresher and fallback FFmpeg uses the refreshed URL."""
+        """Streamlink stall falls back to direct FFmpeg using the initial cached direct URL."""
         chunk2 = b"\x05\x06" * 80000
 
         sl_proc = MagicMock()
@@ -417,16 +424,11 @@ class TestAudioStreamManager(unittest.IsolatedAsyncioTestCase):
         ff_proc2.stderr.readline.return_value = b""
         ff_proc2.stdout.read.side_effect = [chunk2, b""]
 
-        url_refresher = AsyncMock(
-            return_value="https://manifest.googlevideo.com/refreshed_live_stall.m3u8"
-        )
-
         manager = AudioStreamManager(
             stream_url="https://media.example/live.m3u8",
-            direct_url="https://manifest.googlevideo.com/stale_initial.m3u8",
+            direct_url="https://manifest.googlevideo.com/initial_cached.m3u8",
             chunk_duration_seconds=0.01,
             max_consecutive_timeouts=1,
-            url_refresher=url_refresher,
         )
 
         with patch(
@@ -438,143 +440,29 @@ class TestAudioStreamManager(unittest.IsolatedAsyncioTestCase):
         read_event.set()
         self.assertEqual(len(chunks), 1)
         self.assertEqual(chunks[0], chunk2)
-        url_refresher.assert_awaited_once()
 
         fallback_cmd = popen.call_args_list[2].args[0]
         self.assertIn(
-            "https://manifest.googlevideo.com/refreshed_live_stall.m3u8",
-            fallback_cmd,
-        )
-        self.assertNotIn("https://manifest.googlevideo.com/stale_initial.m3u8", fallback_cmd)
-        self.assertEqual(manager.direct_url, "https://manifest.googlevideo.com/refreshed_live_stall.m3u8")
-
-    async def test_refresh_exception_retains_cached_url_and_continues_fallback(
-        self,
-    ) -> None:
-        """When URL refresher raises an exception, fallback proceeds using the existing cached direct URL."""
-        chunk1 = b"\x01\x02" * 80000
-        chunk2 = b"\x03\x04" * 80000
-
-        sl_proc = MagicMock()
-        sl_proc.poll.return_value = None
-        sl_proc.wait.return_value = 0
-        sl_proc.stderr.readline.return_value = b""
-
-        ff_proc1 = MagicMock()
-        ff_proc1.poll.return_value = None
-        ff_proc1.wait.return_value = 0
-        ff_proc1.stderr.readline.return_value = b""
-        ff_proc1.stdout.read.side_effect = [chunk1, b""]
-
-        ff_proc2 = MagicMock()
-        ff_proc2.poll.return_value = None
-        ff_proc2.wait.return_value = 0
-        ff_proc2.stderr.readline.return_value = b""
-        ff_proc2.stdout.read.side_effect = [chunk2, b""]
-
-        url_refresher = AsyncMock(
-            side_effect=RuntimeError("yt-dlp transient network failure")
-        )
-
-        manager = AudioStreamManager(
-            stream_url="https://www.youtube.com/watch?v=sample123",
-            direct_url="https://manifest.googlevideo.com/cached_stale.m3u8",
-            chunk_duration_seconds=5.0,
-            url_refresher=url_refresher,
-        )
-
-        with patch(
-            "src.audio_stream.subprocess.Popen",
-            side_effect=[sl_proc, ff_proc1, ff_proc2],
-        ) as popen:
-            collected_chunks = [chunk async for chunk in manager.stream_audio_chunks()]
-
-        self.assertEqual(len(collected_chunks), 2)
-        self.assertEqual(collected_chunks[0], chunk1)
-        self.assertEqual(collected_chunks[1], chunk2)
-        url_refresher.assert_awaited_once()
-
-        # Fallback command still used the cached URL
-        fallback_cmd = popen.call_args_list[2].args[0]
-        self.assertIn(
-            "https://manifest.googlevideo.com/cached_stale.m3u8",
+            "https://manifest.googlevideo.com/initial_cached.m3u8",
             fallback_cmd,
         )
         self.assertEqual(
-            manager.direct_url,
-            "https://manifest.googlevideo.com/cached_stale.m3u8",
+            manager.direct_url, "https://manifest.googlevideo.com/initial_cached.m3u8"
         )
 
-    async def test_refresh_empty_result_retains_cached_url_and_continues_fallback(
+    async def test_startup_streamlink_failure_uses_initial_direct_url(
         self,
     ) -> None:
-        """When URL refresher returns None or whitespace, fallback proceeds using the existing cached direct URL."""
-        chunk1 = b"\x01\x02" * 80000
-        chunk2 = b"\x03\x04" * 80000
-
-        sl_proc = MagicMock()
-        sl_proc.poll.return_value = None
-        sl_proc.wait.return_value = 0
-        sl_proc.stderr.readline.return_value = b""
-
-        ff_proc1 = MagicMock()
-        ff_proc1.poll.return_value = None
-        ff_proc1.wait.return_value = 0
-        ff_proc1.stderr.readline.return_value = b""
-        ff_proc1.stdout.read.side_effect = [chunk1, b""]
-
-        ff_proc2 = MagicMock()
-        ff_proc2.poll.return_value = None
-        ff_proc2.wait.return_value = 0
-        ff_proc2.stderr.readline.return_value = b""
-        ff_proc2.stdout.read.side_effect = [chunk2, b""]
-
-        url_refresher = AsyncMock(return_value="   ")
-
-        manager = AudioStreamManager(
-            stream_url="https://www.youtube.com/watch?v=sample123",
-            direct_url="https://manifest.googlevideo.com/cached_stale.m3u8",
-            chunk_duration_seconds=5.0,
-            url_refresher=url_refresher,
-        )
-
-        with patch(
-            "src.audio_stream.subprocess.Popen",
-            side_effect=[sl_proc, ff_proc1, ff_proc2],
-        ) as popen:
-            collected_chunks = [chunk async for chunk in manager.stream_audio_chunks()]
-
-        self.assertEqual(len(collected_chunks), 2)
-        url_refresher.assert_awaited_once()
-
-        fallback_cmd = popen.call_args_list[2].args[0]
-        self.assertIn(
-            "https://manifest.googlevideo.com/cached_stale.m3u8",
-            fallback_cmd,
-        )
-        self.assertEqual(
-            manager.direct_url,
-            "https://manifest.googlevideo.com/cached_stale.m3u8",
-        )
-
-    async def test_startup_streamlink_failure_uses_initial_direct_url_without_refresh(
-        self,
-    ) -> None:
-        """Streamlink failure during initial startup uses initial direct_url without calling url_refresher."""
+        """Streamlink failure during initial startup falls back to direct FFmpeg using initial direct URL."""
         direct_process = MagicMock()
         direct_process.stdout.read.return_value = b""
         direct_process.stderr.readline.return_value = b""
         direct_process.poll.return_value = None
         direct_process.wait.return_value = 0
 
-        url_refresher = AsyncMock(
-            return_value="https://manifest.googlevideo.com/unexpected_refresh.m3u8"
-        )
-
         manager = AudioStreamManager(
             stream_url="https://www.youtube.com/watch?v=sample123",
             direct_url="https://manifest.googlevideo.com/initial_fresh.m3u8",
-            url_refresher=url_refresher,
         )
 
         with patch(
@@ -584,18 +472,127 @@ class TestAudioStreamManager(unittest.IsolatedAsyncioTestCase):
             chunks = [chunk async for chunk in manager.stream_audio_chunks()]
 
         self.assertEqual(chunks, [])
-        url_refresher.assert_not_called()
         self.assertEqual(popen.call_count, 2)
         fallback_command = popen.call_args_list[1].args[0]
         self.assertIn(
             "https://manifest.googlevideo.com/initial_fresh.m3u8",
             fallback_command,
         )
-        self.assertNotIn("unexpected_refresh", fallback_command)
         self.assertEqual(
             manager.direct_url,
             "https://manifest.googlevideo.com/initial_fresh.m3u8",
         )
+
+    async def test_streamlink_stderr_429_classifies_provider_rate_limit(
+        self,
+    ) -> None:
+        """Sanitized Streamlink stderr containing HTTP 429 is classified as PROVIDER_RATE_LIMIT and skips fallback."""
+        sl_proc = MagicMock()
+        sl_proc.poll.return_value = 1
+        sl_proc.wait.return_value = 1
+        sl_proc.stderr.readline.return_value = b""
+
+        ff_proc = MagicMock()
+        ff_proc.poll.return_value = None
+        ff_proc.wait.return_value = 0
+        ff_proc.stderr.readline.return_value = b""
+        ff_proc.stdout.read.return_value = b""
+
+        manager = AudioStreamManager(
+            stream_url="https://www.youtube.com/watch?v=sample123",
+            direct_url="https://manifest.googlevideo.com/direct.m3u8",
+        )
+        # Inject HTTP 429 stderr line into Streamlink tail
+        manager._streamlink_stderr_tail.append(
+            "error: Unable to open URL: https://youtube.com/watch?v=abc (429 Client Error: Too Many Requests for url: https://...)"
+        )
+
+        with patch(
+            "src.audio_stream.subprocess.Popen",
+            side_effect=[sl_proc, ff_proc],
+        ) as popen:
+            chunks = [chunk async for chunk in manager.stream_audio_chunks()]
+
+        self.assertEqual(chunks, [])
+        self.assertEqual(
+            manager.failure_reason, CaptureFailureReason.PROVIDER_RATE_LIMIT
+        )
+        # Direct FFmpeg fallback was NOT attempted because 429 aborted immediately
+        self.assertEqual(popen.call_count, 2)  # Streamlink + initial piped FFmpeg only
+
+    async def test_ffmpeg_stderr_429_classifies_provider_rate_limit(
+        self,
+    ) -> None:
+        """Sanitized direct FFmpeg stderr containing HTTP 429 is classified as PROVIDER_RATE_LIMIT."""
+        ff_proc = MagicMock()
+        ff_proc.poll.return_value = 1
+        ff_proc.wait.return_value = 1
+        ff_proc.stderr.readline.return_value = b""
+        ff_proc.stdout.read.return_value = b""
+
+        manager = AudioStreamManager(
+            stream_url="https://www.youtube.com/watch?v=sample123",
+            direct_url="https://manifest.googlevideo.com/direct.m3u8",
+            use_streamlink=False,
+        )
+        # Inject 429 into FFmpeg stderr tail
+        manager._ffmpeg_stderr_tail.append(
+            "[https @ 0x12345] Server returned 429 Client Error: Too Many Requests"
+        )
+
+        with patch(
+            "src.audio_stream.subprocess.Popen",
+            return_value=ff_proc,
+        ):
+            chunks = [chunk async for chunk in manager.stream_audio_chunks()]
+
+        self.assertEqual(chunks, [])
+        self.assertEqual(
+            manager.failure_reason, CaptureFailureReason.PROVIDER_RATE_LIMIT
+        )
+
+    def test_rate_limit_classifier_requires_http_context(self) -> None:
+        self.assertTrue(is_rate_limit_diagnostic("HTTP error 429"))
+        self.assertTrue(is_rate_limit_diagnostic("429 Client Error: Too Many Requests"))
+        self.assertTrue(is_rate_limit_diagnostic("Too Many Requests"))
+        self.assertFalse(
+            is_rate_limit_diagnostic("Failed while downloading media segment 429.ts")
+        )
+
+    async def test_exact_delivered_pcm_bytes_and_audio_seconds(self) -> None:
+        """Delivered PCM byte length and audio seconds are accurately recorded, including partial chunks."""
+        # 16kHz, mono, 16-bit = 32000 bytes/sec
+        # Chunk 1: full 5s = 160,000 bytes
+        chunk1 = b"\x01\x00" * 80000
+        # Chunk 2: partial 0.5s = 16,000 bytes
+        chunk2 = b"\x02\x00" * 8000
+
+        ff_proc = MagicMock()
+        ff_proc.poll.return_value = None
+        ff_proc.wait.return_value = 0
+        ff_proc.stderr.readline.return_value = b""
+        ff_proc.stdout.read.side_effect = [chunk1, chunk2, b""]
+
+        manager = AudioStreamManager(
+            stream_url="https://www.youtube.com/watch?v=sample123",
+            use_streamlink=False,
+            chunk_duration_seconds=5.0,
+        )
+
+        with patch(
+            "src.audio_stream.subprocess.Popen",
+            return_value=ff_proc,
+        ):
+            chunks = [chunk async for chunk in manager.stream_audio_chunks()]
+
+        self.assertEqual(len(chunks), 2)
+        expected_bytes = len(chunk1) + len(chunk2)  # 176,000 bytes
+        self.assertEqual(manager.pcm_bytes_delivered, expected_bytes)
+        expected_seconds = (
+            expected_bytes / manager.bytes_per_second
+        )  # 176000 / 32000 = 5.5s
+        self.assertEqual(manager.audio_seconds_delivered, expected_seconds)
+        self.assertEqual(manager.failure_reason, CaptureFailureReason.EOF)
 
     def test_diagnostic_sanitization_removes_query_params_and_secrets(self) -> None:
         """Sanitization must strip query strings and mask secrets and tokens."""
@@ -633,9 +630,7 @@ class TestAudioStreamManager(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("token=19", lines[-1])
 
         empty_tail = collections.deque(maxlen=100)
-        self.assertEqual(
-            format_diagnostic_tail(empty_tail), "<no stderr output>"
-        )
+        self.assertEqual(format_diagnostic_tail(empty_tail), "<no stderr output>")
 
     def test_stderr_drain_bounds_individual_line_size(self) -> None:
         """A provider-controlled line cannot bypass the bounded tail by being huge."""
@@ -969,6 +964,7 @@ class TestAudioStreamManager(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         """Calling manager.stop() while reader is blocked on backpressure terminates reader without leak."""
+
         def infinite_chunks(_size: int) -> bytes:
             return b"\xaa" * 160
 
@@ -1001,6 +997,7 @@ class TestAudioStreamManager(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         """Cancelling the consumer task while reader is blocked on backpressure releases thread cleanly."""
+
         def infinite_chunks(_size: int) -> bytes:
             return b"\xbb" * 160
 
@@ -1157,6 +1154,25 @@ class TestRestartBackoffTracker(unittest.IsolatedAsyncioTestCase):
         elapsed = asyncio.get_running_loop().time() - start_time
 
         # Must exit almost immediately upon stop_event (< 0.5s), not 10s
+        self.assertLess(elapsed, 0.5)
+
+    async def test_rate_limit_cooldown_uses_minimum_and_is_interruptible(self) -> None:
+        tracker = RestartBackoffTracker(initial_delay_seconds=1.0)
+        stop_event = asyncio.Event()
+
+        async def trigger_stop() -> None:
+            await asyncio.sleep(0.02)
+            stop_event.set()
+
+        asyncio.create_task(trigger_stop())
+        start_time = asyncio.get_running_loop().time()
+        selected_delay = await tracker.wait_cooldown(
+            min_cooldown_seconds=120.0,
+            stop_event=stop_event,
+        )
+        elapsed = asyncio.get_running_loop().time() - start_time
+
+        self.assertEqual(selected_delay, 120.0)
         self.assertLess(elapsed, 0.5)
 
 

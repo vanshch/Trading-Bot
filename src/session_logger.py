@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import sys
 import threading
@@ -20,6 +21,15 @@ from typing import Any
 logger = logging.getLogger("trade_bot.session_logger")
 
 DEFAULT_STORAGE_PATH = Path("data/live_sessions.json")
+
+
+def _nonnegative_finite_float(value: object, default: float = 0.0) -> float:
+    """Return a finite non-negative float for persisted metric input."""
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return parsed if math.isfinite(parsed) and parsed >= 0.0 else default
 
 
 @dataclass
@@ -42,13 +52,40 @@ class LiveSessionRecord:
     management_detected: int = 0
     management_alerted: int = 0
     error_message: str | None = None
+    audio_seconds_captured: float = 0.0
+    coverage_percent: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> LiveSessionRecord:
-        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+        kwargs = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
+        kwargs["duration_seconds"] = _nonnegative_finite_float(
+            kwargs.get("duration_seconds")
+        )
+        kwargs["audio_seconds_captured"] = _nonnegative_finite_float(
+            kwargs.get("audio_seconds_captured")
+        )
+
+        if "coverage_percent" in kwargs and kwargs["coverage_percent"] is not None:
+            kwargs["coverage_percent"] = max(
+                0.0,
+                min(
+                    100.0,
+                    _nonnegative_finite_float(kwargs["coverage_percent"]),
+                ),
+            )
+        else:
+            # Backward-compatible calculation for older records
+            duration = kwargs["duration_seconds"]
+            captured = kwargs["audio_seconds_captured"]
+            if duration > 0.0 and captured > 0.0:
+                raw = (captured / duration) * 100.0
+                kwargs["coverage_percent"] = max(0.0, min(100.0, round(raw, 2)))
+            else:
+                kwargs["coverage_percent"] = 0.0
+        return cls(**kwargs)
 
 
 class LiveSessionLogger:
@@ -112,12 +149,21 @@ class LiveSessionLogger:
         )
         return record
 
-    def record_chunk(self, session_id: str, count: int = 1) -> None:
-        """Increment processed audio/video chunk count for an active session."""
+    def record_chunk(
+        self,
+        session_id: str,
+        count: int = 1,
+        *,
+        pcm_bytes: int = 0,
+        bytes_per_second: int = 32000,
+    ) -> None:
+        """Increment processed audio/video chunk count and decoded audio seconds for an active session."""
         with self._lock:
             session = self._active_sessions.get(session_id)
             if session:
                 session.chunks_processed += count
+                if pcm_bytes > 0 and bytes_per_second > 0:
+                    session.audio_seconds_captured += pcm_bytes / bytes_per_second
 
     def record_trigger(self, session_id: str) -> None:
         """Increment spoken keyword trigger count for an active session."""
@@ -149,6 +195,9 @@ class LiveSessionLogger:
         session_id: str,
         status: str = "COMPLETED",
         error: str | None = None,
+        *,
+        audio_seconds_captured: float | None = None,
+        duration_seconds: float | None = None,
     ) -> LiveSessionRecord | None:
         """Conclude an active live stream monitoring session and update storage."""
         with self._lock:
@@ -169,11 +218,29 @@ class LiveSessionLogger:
             session.status = status
             session.error_message = error
 
-            try:
-                start_dt = datetime.fromisoformat(session.started_at)
-                session.duration_seconds = max(0.0, (now - start_dt).total_seconds())
-            except (ValueError, TypeError):
-                session.duration_seconds = 0.0
+            if duration_seconds is not None:
+                session.duration_seconds = _nonnegative_finite_float(duration_seconds)
+            else:
+                try:
+                    start_dt = datetime.fromisoformat(session.started_at)
+                    session.duration_seconds = max(
+                        0.0, (now - start_dt).total_seconds()
+                    )
+                except (ValueError, TypeError):
+                    session.duration_seconds = 0.0
+
+            if audio_seconds_captured is not None:
+                session.audio_seconds_captured = _nonnegative_finite_float(
+                    audio_seconds_captured
+                )
+
+            if session.duration_seconds > 0.0:
+                raw_coverage = (
+                    session.audio_seconds_captured / session.duration_seconds
+                ) * 100.0
+                session.coverage_percent = max(0.0, min(100.0, round(raw_coverage, 2)))
+            else:
+                session.coverage_percent = 0.0
 
             records = self._load_records()
             updated = False
@@ -189,7 +256,8 @@ class LiveSessionLogger:
 
         logger.info(
             f"Logged live broadcast completion [session={session.session_id}] for '{session.channel_name}' "
-            f"(Duration: {session.duration_seconds:.1f}s, Chunks: {session.chunks_processed}, "
+            f"(Duration: {session.duration_seconds:.1f}s, Audio: {session.audio_seconds_captured:.1f}s, "
+            f"Coverage: {session.coverage_percent:.1f}%, Chunks: {session.chunks_processed}, "
             f"Triggers: {session.triggers_detected}, Trades: {session.trades_detected}, "
             f"Management: {session.management_detected})"
         )
@@ -211,12 +279,27 @@ class LiveSessionLogger:
         sessions = self.list_sessions()
         total_count = len(sessions)
         total_duration_sec = sum(s.duration_seconds for s in sessions)
+        total_audio_sec = sum(s.audio_seconds_captured for s in sessions)
         total_chunks = sum(s.chunks_processed for s in sessions)
         total_triggers = sum(s.triggers_detected for s in sessions)
         total_trades = sum(s.trades_detected for s in sessions)
         total_alerts = sum(s.trades_alerted for s in sessions)
         total_mgmt_detected = sum(s.management_detected for s in sessions)
         total_mgmt_alerted = sum(s.management_alerted for s in sessions)
+
+        if total_duration_sec > 0:
+            captured_for_coverage = sum(
+                min(s.audio_seconds_captured, s.duration_seconds) for s in sessions
+            )
+            aggregate_coverage_percent = max(
+                0.0,
+                min(
+                    100.0,
+                    round(captured_for_coverage / total_duration_sec * 100.0, 2),
+                ),
+            )
+        else:
+            aggregate_coverage_percent = 0.0
 
         channel_counts: dict[str, int] = {}
         for s in sessions:
@@ -233,6 +316,9 @@ class LiveSessionLogger:
             "total_lives_captured": total_count,
             "total_monitoring_duration_seconds": total_duration_sec,
             "total_duration_formatted": formatted_duration,
+            "total_audio_seconds_captured": round(total_audio_sec, 2),
+            "coverage_percent": aggregate_coverage_percent,
+            "duration_weighted_coverage_percent": aggregate_coverage_percent,
             "total_audio_chunks_processed": total_chunks,
             "total_triggers_detected": total_triggers,
             "total_trades_detected": total_trades,
@@ -254,6 +340,7 @@ class LiveSessionLogger:
             "=" * 65,
             f"Total Live Streams Captured:   {summary['total_lives_captured']}",
             f"Total Live Monitoring Time:    {summary['total_duration_formatted']}",
+            f"Total Audio Captured:          {summary['total_audio_seconds_captured']:.1f}s ({summary['coverage_percent']:.1f}% coverage)",
             f"Total Audio Chunks Processed:  {summary['total_audio_chunks_processed']}",
             f"Total Spoken Triggers Fired:   {summary['total_triggers_detected']}",
             f"Total Active Trades Confirmed: {summary['total_trades_detected']}",
@@ -276,7 +363,8 @@ class LiveSessionLogger:
                 dur_m = s.duration_seconds / 60
                 lines.append(
                     f"[{s.session_id}] {s.channel_name} | {s.started_at[:19]} | "
-                    f"Dur: {dur_m:.1f}m | Triggers: {s.triggers_detected} | "
+                    f"Dur: {dur_m:.1f}m | Audio: {s.audio_seconds_captured:.1f}s ({s.coverage_percent:.1f}%) | "
+                    f"Triggers: {s.triggers_detected} | "
                     f"Trades: {s.trades_detected} | Status: {s.status}"
                 )
         lines.append("=" * 65)

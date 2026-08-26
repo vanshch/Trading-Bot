@@ -8,7 +8,8 @@ import re
 import subprocess
 import sys
 import threading
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Callable
+from enum import Enum
 from typing import Any
 from urllib.parse import urlparse
 
@@ -17,6 +18,34 @@ from src.logger import _redactor_filter
 logger = logging.getLogger("trade_bot.audio_stream")
 
 _MAX_DIAGNOSTIC_LINE_CHARS = 4096
+
+_RATE_LIMIT_PATTERN = re.compile(
+    r"(?:too\s+many\s+requests|"
+    r"\b429\b\s+(?:client\s+error|http\s+error|too\s+many\s+requests)|"
+    r"(?:http|server\s+returned)[^\r\n]{0,32}\b429\b)",
+    re.IGNORECASE,
+)
+
+
+class CaptureFailureReason(str, Enum):
+    """Structured failure classification for audio stream capture."""
+
+    NONE = "NONE"
+    PROVIDER_RATE_LIMIT = "PROVIDER_RATE_LIMIT"
+    PROCESS_EXIT = "PROCESS_EXIT"
+    TIMEOUT = "TIMEOUT"
+    EOF = "EOF"
+    UNKNOWN = "UNKNOWN"
+
+    def __bool__(self) -> bool:
+        return self != CaptureFailureReason.NONE
+
+
+def is_rate_limit_diagnostic(text: str) -> bool:
+    """Classify whether sanitized diagnostic text contains an HTTP 429 / Too Many Requests response."""
+    if not text or not isinstance(text, str):
+        return False
+    return bool(_RATE_LIMIT_PATTERN.search(text))
 
 
 def sanitize_diagnostic(text: str) -> str:
@@ -104,6 +133,28 @@ class RestartBackoffTracker:
         self.current_delay_seconds = self.initial_delay_seconds
         self._consecutive_failures = 0
 
+    async def wait_cooldown(
+        self,
+        min_cooldown_seconds: float = 0.0,
+        stop_event: asyncio.Event | None = None,
+        jitter_fn: Callable[[float], float] | None = None,
+    ) -> float:
+        """Wait for the larger of computed backoff delay and min_cooldown_seconds, or until stop_event is set.
+
+        Returns the actual delay waited.
+        """
+        delay = max(
+            self.compute_next_delay(jitter_fn=jitter_fn), float(min_cooldown_seconds)
+        )
+        if stop_event is not None:
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=delay)
+            except asyncio.TimeoutError:
+                pass
+        else:
+            await asyncio.sleep(delay)
+        return delay
+
     async def wait(
         self,
         stop_event: asyncio.Event | None = None,
@@ -113,15 +164,11 @@ class RestartBackoffTracker:
 
         Returns the actual delay waited.
         """
-        delay = self.compute_next_delay(jitter_fn=jitter_fn)
-        if stop_event is not None:
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=delay)
-            except asyncio.TimeoutError:
-                pass
-        else:
-            await asyncio.sleep(delay)
-        return delay
+        return await self.wait_cooldown(
+            min_cooldown_seconds=0.0,
+            stop_event=stop_event,
+            jitter_fn=jitter_fn,
+        )
 
 
 class AudioStreamManager:
@@ -136,18 +183,17 @@ class AudioStreamManager:
         max_consecutive_timeouts: int = 2,
         use_streamlink: bool = True,
         direct_url: str | None = None,
-        url_refresher: Callable[[], Awaitable[str | None]] | None = None,
     ) -> None:
         self.stream_url = stream_url.strip()
         self.direct_url = direct_url.strip() if direct_url else None
-        self.url_refresher = url_refresher
         self.chunk_duration_seconds = chunk_duration_seconds
         self.sample_rate = sample_rate
         self.channels = channels
         self.max_consecutive_timeouts = max(1, int(max_consecutive_timeouts))
         self.use_streamlink = use_streamlink
         # 16-bit PCM = 2 bytes per sample
-        self.bytes_per_second = self.sample_rate * self.channels * 2
+        self.sample_width = 2
+        self.bytes_per_second = self.sample_rate * self.channels * self.sample_width
         self.chunk_size_bytes = int(self.bytes_per_second * self.chunk_duration_seconds)
         self._process: subprocess.Popen | None = None
         self._streamlink_process: subprocess.Popen | None = None
@@ -157,19 +203,46 @@ class AudioStreamManager:
         self._queue: asyncio.Queue[bytes | None] | None = None
         self._fallback_attempted: bool = False
         self._active_transport: str = "none"
+        self._pcm_bytes_delivered: int = 0
+        self._failure_reason: CaptureFailureReason = CaptureFailureReason.NONE
         self._ffmpeg_stderr_tail: collections.deque[str] = collections.deque(maxlen=100)
         self._streamlink_stderr_tail: collections.deque[str] = collections.deque(
             maxlen=100
         )
         self._stderr_threads: list[threading.Thread] = []
 
+    @property
+    def failure_reason(self) -> CaptureFailureReason:
+        """Typed/structured failure classification for the audio stream session."""
+        return self._failure_reason
+
+    @property
+    def pcm_bytes_delivered(self) -> int:
+        """Exact PCM byte length delivered across all yielded chunks in current session."""
+        return self._pcm_bytes_delivered
+
+    @property
+    def audio_seconds_delivered(self) -> float:
+        """Exact decoded audio duration in seconds delivered to consumer in current session."""
+        if self.bytes_per_second <= 0:
+            return 0.0
+        return self._pcm_bytes_delivered / self.bytes_per_second
+
+    def _check_rate_limit(self) -> bool:
+        """Inspect sanitized stderr tails for HTTP 429 / Too Many Requests and classify failure."""
+        for tail in (self._streamlink_stderr_tail, self._ffmpeg_stderr_tail):
+            for line in tail:
+                sanitized = sanitize_diagnostic(line)
+                if is_rate_limit_diagnostic(sanitized):
+                    self._failure_reason = CaptureFailureReason.PROVIDER_RATE_LIMIT
+                    return True
+        return False
+
     def _build_streamlink_command(self) -> list[str]:
         """Build a resilient transport command that writes media to stdout."""
         target = self.stream_url
         if not (
-            "youtube.com" in target
-            or "youtu.be" in target
-            or "twitch.tv" in target
+            "youtube.com" in target or "youtu.be" in target or "twitch.tv" in target
         ) and not target.startswith("hls://"):
             target = f"hls://{target}"
 
@@ -353,6 +426,11 @@ class AudioStreamManager:
                     logger.warning("Streamlink startup diagnostic:\n%s", diag)
                 self._stop_active_processes_sync()
                 self._fallback_attempted = True
+                if self._check_rate_limit():
+                    logger.warning(
+                        "Streamlink startup encountered provider rate limit (HTTP 429)."
+                    )
+                    return
 
         self._start_direct_ffmpeg()
 
@@ -433,9 +511,7 @@ class AudioStreamManager:
                 logger.debug("Reader thread exited: %s", e)
             finally:
                 if not stop_event.is_set() and queue is not None:
-                    self._enqueue_with_backpressure(
-                        queue, None, loop, stop_event
-                    )
+                    self._enqueue_with_backpressure(queue, None, loop, stop_event)
 
         self._thread = threading.Thread(target=_reader, daemon=True)
         self._thread.start()
@@ -475,7 +551,9 @@ class AudioStreamManager:
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=1.0)
             if self._thread.is_alive():
-                logger.warning("Audio reader thread did not stop within cleanup timeout.")
+                logger.warning(
+                    "Audio reader thread did not stop within cleanup timeout."
+                )
         self._thread = None
 
         for t in list(self._stderr_threads):
@@ -490,20 +568,16 @@ class AudioStreamManager:
         if self._fallback_attempted:
             return False
         self._fallback_attempted = True
+
+        if self._check_rate_limit():
+            logger.warning(
+                "Streamlink encountered provider rate limit (HTTP 429); skipping direct fallback."
+            )
+            return False
+
         logger.warning(
             "Stopping Streamlink pipeline and attempting direct FFmpeg fallback..."
         )
-
-        if self.url_refresher is not None:
-            try:
-                refreshed_url = await self.url_refresher()
-                if refreshed_url and isinstance(refreshed_url, str) and refreshed_url.strip():
-                    self.direct_url = refreshed_url.strip()
-                    logger.info("Direct FFmpeg media URL refreshed successfully.")
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "Direct URL refresh failed (%s); retaining cached URL.", exc
-                )
 
         # Stop active processes and reader thread
         await asyncio.to_thread(self._stop_active_processes_sync)
@@ -522,6 +596,7 @@ class AudioStreamManager:
             if diag != "<no stderr output>":
                 logger.error("FFmpeg fallback diagnostic:\n%s", diag)
             await asyncio.to_thread(self._stop_active_processes_sync)
+            self._check_rate_limit()
             return False
 
     async def stream_audio_chunks(
@@ -530,6 +605,8 @@ class AudioStreamManager:
         """Continuously read and yield raw PCM audio chunks of chunk_duration_seconds."""
         self._is_running = True
         self._fallback_attempted = False
+        self._failure_reason = CaptureFailureReason.NONE
+        self._pcm_bytes_delivered = 0
         loop = asyncio.get_running_loop()
         self._queue = asyncio.Queue(maxsize=20)
 
@@ -540,6 +617,9 @@ class AudioStreamManager:
         )
         try:
             self._start_capture_processes()
+            if self._failure_reason == CaptureFailureReason.PROVIDER_RATE_LIMIT:
+                return
+
             self._start_reader_thread(loop)
             consecutive_timeouts = 0
             while self._is_running:
@@ -553,6 +633,9 @@ class AudioStreamManager:
                     )
                     if chunk is None:
                         # EOF received
+                        if self._check_rate_limit():
+                            break
+
                         if (
                             self._active_transport == "streamlink"
                             and not self._fallback_attempted
@@ -575,6 +658,12 @@ class AudioStreamManager:
                                 consecutive_timeouts = 0
                                 continue
                             else:
+                                if self._check_rate_limit():
+                                    pass
+                                elif self._failure_reason == CaptureFailureReason.NONE:
+                                    self._failure_reason = (
+                                        CaptureFailureReason.PROCESS_EXIT
+                                    )
                                 break
                         else:
                             logger.warning("Audio capture stream reached EOF.")
@@ -582,9 +671,12 @@ class AudioStreamManager:
                                 diag = format_diagnostic_tail(self._ffmpeg_stderr_tail)
                                 if diag != "<no stderr output>":
                                     logger.warning("FFmpeg exit diagnostic:\n%s", diag)
+                            if not self._check_rate_limit():
+                                self._failure_reason = CaptureFailureReason.EOF
                             break
 
                     consecutive_timeouts = 0
+                    self._pcm_bytes_delivered += len(chunk)
                     yield chunk
 
                 except asyncio.TimeoutError:
@@ -600,12 +692,14 @@ class AudioStreamManager:
                         and self._streamlink_process.poll() is not None
                     )
                     ff_exited = (
-                        self._process is not None
-                        and self._process.poll() is not None
+                        self._process is not None and self._process.poll() is not None
                     )
                     stalled = consecutive_timeouts >= self.max_consecutive_timeouts
 
                     if sl_exited or ff_exited or stalled:
+                        if self._check_rate_limit():
+                            break
+
                         if (
                             self._active_transport == "streamlink"
                             and not self._fallback_attempted
@@ -628,6 +722,12 @@ class AudioStreamManager:
                                 consecutive_timeouts = 0
                                 continue
                             else:
+                                if self._check_rate_limit():
+                                    pass
+                                elif self._failure_reason == CaptureFailureReason.NONE:
+                                    self._failure_reason = (
+                                        CaptureFailureReason.PROCESS_EXIT
+                                    )
                                 break
                         else:
                             if ff_exited:
@@ -638,10 +738,16 @@ class AudioStreamManager:
                                 diag = format_diagnostic_tail(self._ffmpeg_stderr_tail)
                                 if diag != "<no stderr output>":
                                     logger.error("FFmpeg diagnostic:\n%s", diag)
+                                if not self._check_rate_limit():
+                                    self._failure_reason = (
+                                        CaptureFailureReason.PROCESS_EXIT
+                                    )
                             elif stalled:
                                 logger.error(
                                     "Audio capture stalled while FFmpeg remained alive; restarting with a fresh stream URL."
                                 )
+                                if not self._check_rate_limit():
+                                    self._failure_reason = CaptureFailureReason.TIMEOUT
                             break
                     continue
         finally:
@@ -651,3 +757,6 @@ class AudioStreamManager:
         """Gracefully terminate FFmpeg and its optional Streamlink transport."""
         self._is_running = False
         await asyncio.to_thread(self._stop_active_processes_sync)
+        # Stderr drain threads are joined during process cleanup, so inspect their
+        # final lines only after cleanup has completed.
+        self._check_rate_limit()

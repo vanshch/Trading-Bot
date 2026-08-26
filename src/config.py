@@ -113,6 +113,11 @@ class CaptureConfig(BaseModel):
         le=1.0,
         description="Bounded random jitter ratio for restart delays (0.0 in unit tests)",
     )
+    provider_rate_limit_cooldown_seconds: float = Field(
+        default=120.0,
+        gt=0.0,
+        description="Circuit-breaker cooldown in seconds after provider HTTP 429 rate limit",
+    )
 
     @model_validator(mode="after")
     def check_restart_delay_bounds(self) -> "CaptureConfig":
@@ -357,6 +362,7 @@ class AppConfig(BaseModel):
         if v not in valid:
             raise ValueError(f"Invalid log_level '{v}'. Must be one of {valid}")
         return v
+
 
 def mask_secret(secret: str | SecretStr) -> str:
     """Safely mask sensitive strings for display/logging without secret leakage."""
