@@ -127,6 +127,7 @@ audio:
   max_retries: 3
   retry_delay_seconds: 1.0
 capture:
+  screenshots_enabled: false
   frame_interval_seconds: 5.0
   live_poll_interval_seconds: 60.0
   stream_timeout_seconds: 15.0

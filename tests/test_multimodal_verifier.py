@@ -146,6 +146,33 @@ async def test_multimodal_verifier_model_fallback_sequence():
     assert models_called == ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-3.7-flash"]
 
 
+@pytest.mark.asyncio
+async def test_multimodal_verifier_supports_transcript_only_mode():
+    verifier = MultimodalVerifier(
+        api_key="mock-key",
+        config=AIConfig(max_retries=1),
+    )
+    observed = {}
+
+    def mock_call(client, jpeg_bytes, prompt_text, model_name):
+        observed["jpeg_bytes"] = jpeg_bytes
+        observed["prompt_text"] = prompt_text
+        return '{"signal_type": "NONE", "confidence": 0.1}'
+
+    with patch.object(
+        verifier, "_call_gemini_multimodal_sync", side_effect=mock_call
+    ), patch.object(verifier, "_get_client", return_value=MagicMock()):
+        result = await verifier.verify_multimodal_trade(
+            frame=None,
+            transcript_context="Spoken context only",
+        )
+
+    assert result.signal_type == "NONE"
+    assert observed["jpeg_bytes"] is None
+    assert "Screenshot capture is disabled" in observed["prompt_text"]
+    assert "Do not infer chart state" in observed["prompt_text"]
+
+
 def test_multimodal_verifier_signal_type_normalization():
     # ENTRY aliases
     v_entry = MultimodalTradeVerification(signal_type="NEW_TRADE", is_trade_active=True, direction="BUY")

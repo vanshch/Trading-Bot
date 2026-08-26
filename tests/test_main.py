@@ -80,6 +80,58 @@ class TestTradeMonitoringService(unittest.IsolatedAsyncioTestCase):
         await self.service.notifier.close()
         self._temp_dir.cleanup()
 
+    @patch("src.stream_manager.StreamManager.check_live_status", new_callable=AsyncMock)
+    @patch("src.stream_manager.StreamManager.capture_frame", new_callable=AsyncMock)
+    @patch("src.audio_stream.AudioStreamManager.stream_audio_chunks")
+    @patch(
+        "src.audio_transcriber.AudioTranscriber.transcribe_pcm_chunk",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "src.multimodal_verifier.MultimodalVerifier.verify_multimodal_trade",
+        new_callable=AsyncMock,
+    )
+    async def test_screenshot_capture_can_be_disabled(
+        self,
+        mock_multimodal: AsyncMock,
+        mock_transcribe: AsyncMock,
+        mock_stream_chunks: MagicMock,
+        mock_capture: AsyncMock,
+        mock_check_live: AsyncMock,
+    ) -> None:
+        from src.multimodal_verifier import MultimodalTradeVerification
+
+        self.config.capture.screenshots_enabled = False
+        self.config.channels[0].trigger_keywords = ["active"]
+        mock_check_live.return_value = (
+            StreamStatus.LIVE,
+            "https://live.stream/manifest.m3u8",
+        )
+
+        async def fake_audio_generator(stop_event=None):
+            yield b"\x00\x00" * 80000
+
+        mock_stream_chunks.side_effect = fake_audio_generator
+        mock_transcribe.return_value = "Trade is active"
+        mock_multimodal.return_value = MultimodalTradeVerification(
+            signal_type="NONE",
+            confidence=0.1,
+        )
+
+        monitor_task = asyncio.create_task(
+            self.service.monitor_channel(self.config.channels[0])
+        )
+        for _ in range(50):
+            if mock_multimodal.call_count:
+                break
+            await asyncio.sleep(0.02)
+
+        self.service.stop()
+        await asyncio.wait_for(monitor_task, timeout=1.0)
+
+        mock_capture.assert_not_awaited()
+        self.assertIsNone(mock_multimodal.call_args.kwargs["frame"])
+
     @patch(
         "src.notifier.TelegramNotifier.send_fast_audio_trade_alert",
         new_callable=AsyncMock,

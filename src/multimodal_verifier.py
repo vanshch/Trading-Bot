@@ -266,14 +266,18 @@ class MultimodalVerifier:
     def _call_gemini_multimodal_sync(
         self,
         client: Any,
-        jpeg_bytes: bytes,
+        jpeg_bytes: bytes | None,
         prompt_text: str,
         model_name: str | None = None,
     ) -> str:
-        """Synchronous Gemini call sending screenshot image and transcript prompt."""
+        """Synchronous Gemini call using transcript text and an optional screenshot."""
         from google import genai  # noqa: F401 (unused variable kept for type hint)
         from google.genai import types
-        image_part = types.Part.from_bytes(data=jpeg_bytes, mime_type="image/jpeg")
+
+        contents: list[Any] = [prompt_text]
+        if jpeg_bytes is not None:
+            image_part = types.Part.from_bytes(data=jpeg_bytes, mime_type="image/jpeg")
+            contents.insert(0, image_part)
 
         config = types.GenerateContentConfig(
             temperature=0.1,
@@ -287,7 +291,7 @@ class MultimodalVerifier:
         target_model = model_name or self.config.model_name
         response = client.models.generate_content(
             model=target_model,
-            contents=[image_part, prompt_text],
+            contents=contents,
             config=config,
         )
 
@@ -327,18 +331,24 @@ class MultimodalVerifier:
 
     async def verify_multimodal_trade(
         self,
-        frame: np.ndarray | bytes,
+        frame: np.ndarray | bytes | None,
         transcript_context: str,
         trigger_phrase: str = "",
         trader_profile: str = "",
     ) -> MultimodalTradeVerification:
-        """Analyze a chart frame + spoken transcript with Gemini and return structured verification."""
-        jpeg_bytes = self._frame_to_jpeg_bytes(frame)
+        """Analyze spoken context and an optional chart frame with Gemini."""
+        jpeg_bytes = self._frame_to_jpeg_bytes(frame) if frame is not None else None
         prompt_text = MULTIMODAL_PROMPT_TEMPLATE.format(
             trader_profile=trader_profile or "General Financial Trader (Hindi/English)",
             trigger_phrase=trigger_phrase,
             transcript_context=transcript_context or "No transcript commentary available.",
         )
+        if jpeg_bytes is None:
+            prompt_text += (
+                "\n\nIMPORTANT: Screenshot capture is disabled. Use only the spoken "
+                "transcript. Do not infer chart state, order fills, position markers, "
+                "instrument, direction, or prices from visual evidence."
+            )
 
         models_to_try = [self.config.model_name]
         for fallback in ("gemini-2.5-flash", "gemini-3.7-flash"):

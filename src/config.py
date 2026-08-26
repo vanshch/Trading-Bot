@@ -70,6 +70,11 @@ class ChannelConfig(BaseModel):
 class CaptureConfig(BaseModel):
     """Video stream frame capture parameters."""
 
+    screenshots_enabled: bool = Field(
+        default=True,
+        description="Whether trade triggers may open the video stream to capture chart frames",
+    )
+
     frame_interval_seconds: float = Field(
         default=5.0, gt=0.0, description="Interval between captured frames"
     )

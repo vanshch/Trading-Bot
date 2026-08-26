@@ -231,34 +231,32 @@ class TradeMonitoringService:
                                 ch_logger.info(
                                     f"AUDIO TRIGGER DETECTED: '{matched_kw}' | Spoken: '{text}'"
                                 )
-                                ch_logger.info(
-                                    "Capturing live chart screenshot for Gemini multimodal verification..."
-                                )
-
-                                # Capture current live frame immediately
-                                frame = await stream_mgr.capture_frame()
                                 frame_jpeg_bytes: bytes | None = None
-                                if frame is not None:
-                                    success, enc = cv2.imencode(
-                                        ".jpg",
-                                        frame,
-                                        [int(cv2.IMWRITE_JPEG_QUALITY), 90],
-                                    )
-                                    if success:
-                                        frame_jpeg_bytes = enc.tobytes()
 
-                                if frame_jpeg_bytes is None:
-                                    ch_logger.warning(
-                                        "Could not capture screenshot; verifying with spoken transcript alone..."
+                                if self.config.capture.screenshots_enabled:
+                                    ch_logger.info(
+                                        "Capturing live chart screenshot for Gemini multimodal verification..."
                                     )
-                                    # Fallback placeholder 1x1 image for multimodal API
-                                    import numpy as np
 
-                                    placeholder = np.zeros(
-                                        (100, 100, 3), dtype=np.uint8
+                                    # Capture current live frame immediately
+                                    frame = await stream_mgr.capture_frame()
+                                    if frame is not None:
+                                        success, enc = cv2.imencode(
+                                            ".jpg",
+                                            frame,
+                                            [int(cv2.IMWRITE_JPEG_QUALITY), 90],
+                                        )
+                                        if success:
+                                            frame_jpeg_bytes = enc.tobytes()
+
+                                    if frame_jpeg_bytes is None:
+                                        ch_logger.warning(
+                                            "Could not capture screenshot; verifying with spoken transcript alone..."
+                                        )
+                                else:
+                                    ch_logger.info(
+                                        "Screenshot capture is disabled; verifying with spoken transcript alone."
                                     )
-                                    _, enc = cv2.imencode(".jpg", placeholder)
-                                    frame_jpeg_bytes = enc.tobytes()
 
                                 # Verify with Gemini Multimodal
                                 recent_context = context_buffer.get_context_text()
