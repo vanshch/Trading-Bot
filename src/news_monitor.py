@@ -35,6 +35,30 @@ CURRENCY_FLAGS: dict[str, str] = {
     "OIL": "🛢️",
 }
 
+# Default currency to impacted traded instruments
+DEFAULT_CURRENCY_INSTRUMENTS: dict[str, list[str]] = {
+    "USD": ["XAUUSD (Gold)", "EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "US500 / US30"],
+    "EUR": ["EURUSD", "EURGBP", "EURJPY", "DAX40"],
+    "GBP": ["GBPUSD", "EURGBP", "GBPJPY", "FTSE100"],
+    "JPY": ["USDJPY", "EURJPY", "GBPJPY", "Nikkei 225"],
+    "CAD": ["USDCAD", "CADJPY", "Crude Oil (WTI)"],
+    "AUD": ["AUDUSD", "AUDJPY", "AUDNZD"],
+    "NZD": ["NZDUSD", "EURNZD", "AUDNZD"],
+    "CHF": ["USDCHF", "EURCHF"],
+    "CNY": ["USDCNH", "China A50", "Emerging Markets"],
+    "INR": ["USDINR", "Nifty 50", "BankNifty"],
+    "OIL": ["USOIL", "UKOIL", "USDCAD"],
+    "XAU": ["XAUUSD (Gold)", "XAGUSD (Silver)"],
+}
+
+
+def get_impacted_instruments(currency: str) -> str:
+    """Return human-readable comma-separated list of instruments impacted by currency news."""
+    instruments = DEFAULT_CURRENCY_INSTRUMENTS.get(currency.upper())
+    if instruments:
+        return ", ".join(instruments)
+    return f"{currency.upper()} Pairs"
+
 
 @dataclass(frozen=True)
 class ForexNewsEvent:
@@ -244,6 +268,62 @@ def format_daily_news_message(
     return "\n".join(lines)
 
 
+def format_pre_event_warning_message(
+    events: list[ForexNewsEvent],
+    target_tz: ZoneInfo,
+    minutes_until: int = 30,
+) -> str:
+    """Format Telegram HTML countdown warning message for high-impact news releasing in ~30 mins."""
+    if not events:
+        return ""
+
+    first_event = events[0]
+    local_dt = first_event.date_utc.astimezone(target_tz)
+    time_str = local_dt.strftime("%I:%M %p")
+    tz_abbr = target_tz.key if hasattr(target_tz, "key") else "IST"
+    country = first_event.country
+    flag = CURRENCY_FLAGS.get(country, "🌐")
+    impacted = get_impacted_instruments(country)
+
+    lines = [
+        f"🚨 <b>HIGH-IMPACT NEWS IN {minutes_until} MINUTES</b> ⏰",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"⏰ <b>Release Time:</b> {time_str} {tz_abbr} (in ~{minutes_until}m)",
+        f"🌐 <b>Currency / Region:</b> {flag} <b>{html.escape(country)}</b>",
+        f"🎯 <b>Impacted Instruments:</b> <code>{html.escape(impacted)}</code>",
+        "━━━━━━━━━━━━━━━━━━━━",
+    ]
+
+    if len(events) == 1:
+        ev = events[0]
+        lines.append(f"📌 <b>Event:</b> <b>{html.escape(ev.title)}</b>")
+        details: list[str] = []
+        if ev.forecast:
+            details.append(f"<i>Forecast:</i> <code>{html.escape(ev.forecast)}</code>")
+        if ev.previous:
+            details.append(f"<i>Previous:</i> <code>{html.escape(ev.previous)}</code>")
+        if details:
+            lines.append(f"📊 {' | '.join(details)}")
+        else:
+            lines.append("📊 <i>Impact:</i> <b>High (Red Folder)</b>")
+    else:
+        lines.append("📌 <b>Releasing Events:</b>")
+        for ev in events:
+            details = []
+            if ev.forecast:
+                details.append(f"Forecast: <code>{html.escape(ev.forecast)}</code>")
+            if ev.previous:
+                details.append(f"Prev: <code>{html.escape(ev.previous)}</code>")
+            detail_str = f" ({' | '.join(details)})" if details else ""
+            lines.append(f"• <b>{html.escape(ev.title)}</b>{detail_str}")
+
+    lines.extend([
+        "━━━━━━━━━━━━━━━━━━━━",
+        "⚠️ <i>Volatility warning: Expect rapid price swings and spread widening. Protect open trades or tighten stops!</i>",
+    ])
+    return "\n".join(lines)
+
+
 def compute_seconds_until_next_run(
     now_dt: datetime,
     schedule_times: list[str],
@@ -279,7 +359,7 @@ def compute_seconds_until_next_run(
 
 
 class ForexNewsService:
-    """Background service managing scheduled daily news updates to Telegram with decoupled isolation."""
+    """Background service managing scheduled daily news updates and pre-event proximity alerts."""
 
     def __init__(
         self,
@@ -304,9 +384,96 @@ class ForexNewsService:
             )
             self.tz = ZoneInfo("Asia/Kolkata")
 
+        self._cached_events: list[ForexNewsEvent] = []
+        self._cached_date: date | None = None
+        self._last_fetch_utc: datetime | None = None
+        self._alerted_event_keys: set[str] = set()
+
     async def close(self) -> None:
         """Close underlying resources."""
         await self.fetcher.close()
+
+    @staticmethod
+    def get_event_key(event: ForexNewsEvent) -> str:
+        """Construct unique string identifier for deduplication."""
+        return f"{event.country}:{event.title}:{event.date_utc.isoformat()}"
+
+    async def refresh_today_events(self) -> list[ForexNewsEvent]:
+        """Fetch and refresh in-memory cache of today's high-impact news events."""
+        now_utc = datetime.now(timezone.utc)
+        today_local = now_utc.astimezone(self.tz).date()
+
+        # If calendar day changed, prune past alerted keys
+        if self._cached_date is not None and self._cached_date != today_local:
+            self._alerted_event_keys.clear()
+
+        events = await self.fetcher.fetch_events()
+        filtered = filter_events_for_day(
+            events=events,
+            target_date=today_local,
+            target_tz=self.tz,
+            impact_levels=self.config.impact_levels,
+            currencies=self.config.currencies,
+        )
+        self._cached_events = filtered
+        self._cached_date = today_local
+        self._last_fetch_utc = now_utc
+        return filtered
+
+    async def check_and_dispatch_pre_event_alerts(
+        self, now_utc: datetime | None = None
+    ) -> list[str]:
+        """Check cached events and dispatch proximity warnings for events releasing in ~30 mins."""
+        if not self.config.pre_event_alert_enabled:
+            return []
+
+        if now_utc is None:
+            now_utc = datetime.now(timezone.utc)
+
+        lead_seconds = self.config.pre_event_minutes * 60.0
+        due_groups: dict[tuple[datetime, str], list[ForexNewsEvent]] = {}
+
+        for event in self._cached_events:
+            event_key = self.get_event_key(event)
+            if event_key in self._alerted_event_keys:
+                continue
+
+            time_until = (event.date_utc - now_utc).total_seconds()
+            # If event is already in the past, mark as processed and skip
+            if time_until <= 0:
+                self._alerted_event_keys.add(event_key)
+                continue
+
+            # Check if within lead window (e.g. <= 30 minutes)
+            if time_until <= lead_seconds:
+                group_key = (event.date_utc, event.country)
+                due_groups.setdefault(group_key, []).append(event)
+
+        dispatched_keys: list[str] = []
+        for (event_dt, country), group_events in due_groups.items():
+            mins_remaining = max(
+                1, round((event_dt - now_utc).total_seconds() / 60)
+            )
+            message = format_pre_event_warning_message(
+                events=group_events,
+                target_tz=self.tz,
+                minutes_until=mins_remaining,
+            )
+            success = await self.notifier.send_news_alert(message)
+            if success:
+                logger.info(
+                    f"Dispatched {mins_remaining}m pre-event warning to Telegram for {len(group_events)} {country} release(s)"
+                )
+                for ev in group_events:
+                    k = self.get_event_key(ev)
+                    self._alerted_event_keys.add(k)
+                    dispatched_keys.append(k)
+            else:
+                logger.error(
+                    f"Failed to deliver pre-event warning to Telegram for {country} news at {event_dt.isoformat()}"
+                )
+
+        return dispatched_keys
 
     async def dispatch_daily_news_update(self, session_label: str = "") -> bool:
         """Fetch today's events, format HTML digest, and dispatch to Telegram."""
@@ -316,14 +483,7 @@ class ForexNewsService:
         logger.info(
             f"Fetching Forex Factory news for {today_local} ({self.tz})..."
         )
-        events = await self.fetcher.fetch_events()
-        filtered = filter_events_for_day(
-            events=events,
-            target_date=today_local,
-            target_tz=self.tz,
-            impact_levels=self.config.impact_levels,
-            currencies=self.config.currencies,
-        )
+        filtered = await self.refresh_today_events()
 
         message = format_daily_news_message(
             events=filtered,
@@ -342,50 +502,76 @@ class ForexNewsService:
         return success
 
     async def run(self, stop_event: asyncio.Event) -> None:
-        """Continuously loop and dispatch alerts at configured schedule times."""
-        if not self.config.enabled:
-            logger.info("Forex Factory news monitoring is disabled in configuration.")
+        """Continuously loop and dispatch scheduled daily briefs and pre-event proximity warnings."""
+        if not self.config.enabled or stop_event.is_set():
+            logger.info(
+                "Forex Factory news monitoring is disabled or stop event is set."
+            )
             return
 
         logger.info(
             f"Forex Factory news monitor started. Scheduled times ({self.tz}): {', '.join(self.config.schedule_times)}"
+            f" | 30m pre-event alerts: {'enabled' if self.config.pre_event_alert_enabled else 'disabled'}"
         )
+
+        # Initial fetch of today's events upon startup
+        try:
+            await self.refresh_today_events()
+            logger.info(
+                f"Forex Factory news cache initialized with {len(self._cached_events)} high-impact event(s) for today"
+            )
+        except Exception:
+            logger.exception("Failed initial fetch of Forex Factory news on service start")
+
+        last_dispatched_slot: str | None = None
 
         while not stop_event.is_set():
             now_utc = datetime.now(timezone.utc)
-            delay, next_time = compute_seconds_until_next_run(
+            delay_to_schedule, _next_schedule_time = compute_seconds_until_next_run(
                 now_dt=now_utc,
                 schedule_times=self.config.schedule_times,
                 target_tz=self.tz,
             )
 
-            logger.info(
-                f"Next Forex Factory news dispatch scheduled at {next_time} {self.tz} (in {delay:.1f}s / {delay / 60:.1f}m)"
-            )
+            local_now = now_utc.astimezone(self.tz)
+            today_local_str = local_now.strftime("%Y-%m-%d")
+            now_time_str = local_now.strftime("%H:%M")
+            slot_id = f"{today_local_str}_{now_time_str}"
+
+            # Check if scheduled daily brief is due
+            if now_time_str in self.config.schedule_times and slot_id != last_dispatched_slot:
+                last_dispatched_slot = slot_id
+                try:
+                    session_label = f"Schedule {now_time_str}"
+                    await self.dispatch_daily_news_update(session_label=session_label)
+                except Exception:
+                    logger.exception("Unexpected error during scheduled Forex Factory news dispatch")
+
+            # Periodic cache refresh if empty, older than 1 hour, or date rolled over
+            if (
+                not self._cached_events
+                or self._last_fetch_utc is None
+                or (now_utc - self._last_fetch_utc) > timedelta(hours=1)
+                or (self._cached_date != local_now.date())
+            ):
+                try:
+                    await self.refresh_today_events()
+                except Exception:
+                    logger.warning("Periodic Forex Factory news refresh encountered error", exc_info=True)
+
+            # Check and dispatch pre-event countdown alerts (e.g. 30m before release)
+            if self.config.pre_event_alert_enabled:
+                try:
+                    await self.check_and_dispatch_pre_event_alerts(now_utc=now_utc)
+                except Exception:
+                    logger.exception("Unexpected error checking pre-event news alerts")
+
+            # Calculate sleep duration: wake up for the next poll or at the exact scheduled brief time
+            sleep_duration = min(self.config.poll_interval_seconds, max(1.0, delay_to_schedule))
 
             try:
-                await asyncio.wait_for(stop_event.wait(), timeout=delay)
-                # Stop event was set
+                await asyncio.wait_for(stop_event.wait(), timeout=sleep_duration)
                 break
-            except asyncio.TimeoutError:
-                # Scheduled time arrived!
-                pass
-
-            if stop_event.is_set():
-                break
-
-            # Isolated execution boundary: failure here never crashes orchestrator
-            try:
-                session_label = f"Schedule {next_time}"
-                await self.dispatch_daily_news_update(session_label=session_label)
-            except Exception:
-                logger.exception(
-                    "Unexpected error during Forex Factory news dispatch"
-                )
-
-            # Short cooldown to prevent duplicate triggers within the same minute
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=5.0)
             except asyncio.TimeoutError:
                 pass
 

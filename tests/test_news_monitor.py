@@ -8,12 +8,15 @@ from zoneinfo import ZoneInfo
 
 from src.config import NewsConfig
 from src.news_monitor import (
+    DEFAULT_CURRENCY_INSTRUMENTS,
     ForexNewsEvent,
     ForexNewsFetcher,
     ForexNewsService,
     compute_seconds_until_next_run,
     filter_events_for_day,
     format_daily_news_message,
+    format_pre_event_warning_message,
+    get_impacted_instruments,
 )
 
 
@@ -248,8 +251,60 @@ class TestComputeSecondsUntilNextRun(unittest.TestCase):
         self.assertAlmostEqual(delay, 57600.0, delta=1.0)
 
 
+class TestPreEventWarningFormatting(unittest.TestCase):
+    """Tests for 30-minute pre-event warning message construction and instrument mapping."""
+
+    def setUp(self) -> None:
+        self.tz = ZoneInfo("Asia/Kolkata")
+        self.usd_event = ForexNewsEvent(
+            title="Non-Farm Employment Change",
+            country="USD",
+            date_utc=datetime(2026, 8, 28, 12, 30, tzinfo=timezone.utc),
+            impact="High",
+            forecast="185K",
+            previous="175K",
+        )
+        self.usd_event2 = ForexNewsEvent(
+            title="Unemployment Rate",
+            country="USD",
+            date_utc=datetime(2026, 8, 28, 12, 30, tzinfo=timezone.utc),
+            impact="High",
+            forecast="4.3%",
+            previous="4.3%",
+        )
+
+    def test_get_impacted_instruments(self) -> None:
+        self.assertIn("USD", DEFAULT_CURRENCY_INSTRUMENTS)
+        self.assertIn("XAUUSD (Gold)", get_impacted_instruments("USD"))
+        self.assertIn("EURUSD", get_impacted_instruments("EUR"))
+        self.assertIn("GBPUSD", get_impacted_instruments("GBP"))
+        self.assertEqual(get_impacted_instruments("XYZ"), "XYZ Pairs")
+
+    def test_format_empty_returns_empty(self) -> None:
+        self.assertEqual(format_pre_event_warning_message([], self.tz), "")
+
+    def test_format_single_event_warning(self) -> None:
+        msg = format_pre_event_warning_message([self.usd_event], self.tz, minutes_until=30)
+        self.assertIn("HIGH-IMPACT NEWS IN 30 MINUTES", msg)
+        self.assertIn("06:00 PM Asia/Kolkata", msg)
+        self.assertIn("🇺🇸 <b>USD</b>", msg)
+        self.assertIn("XAUUSD (Gold)", msg)
+        self.assertIn("Non-Farm Employment Change", msg)
+        self.assertIn("<i>Forecast:</i> <code>185K</code>", msg)
+        self.assertIn("<i>Previous:</i> <code>175K</code>", msg)
+        self.assertIn("Volatility warning", msg)
+
+    def test_format_co_occurring_events_warning(self) -> None:
+        msg = format_pre_event_warning_message([self.usd_event, self.usd_event2], self.tz, minutes_until=29)
+        self.assertIn("HIGH-IMPACT NEWS IN 29 MINUTES", msg)
+        self.assertIn("Releasing Events:", msg)
+        self.assertIn("Non-Farm Employment Change", msg)
+        self.assertIn("Unemployment Rate", msg)
+        self.assertIn("Forecast: <code>185K</code>", msg)
+
+
 class TestForexNewsService(unittest.IsolatedAsyncioTestCase):
-    """Tests for ForexNewsService async lifecycle and dispatch."""
+    """Tests for ForexNewsService async lifecycle, pre-event timers, and dispatch."""
 
     def setUp(self) -> None:
         self.config = NewsConfig(
@@ -257,6 +312,9 @@ class TestForexNewsService(unittest.IsolatedAsyncioTestCase):
             schedule_times=["08:00", "14:00"],
             timezone="Asia/Kolkata",
             impact_levels=["High"],
+            pre_event_alert_enabled=True,
+            pre_event_minutes=30,
+            poll_interval_seconds=10.0,
         )
         self.mock_notifier = MagicMock()
         self.mock_notifier.send_news_alert = AsyncMock(return_value=True)
@@ -284,5 +342,100 @@ class TestForexNewsService(unittest.IsolatedAsyncioTestCase):
         stop_event = asyncio.Event()
         stop_event.set()
         await self.service.run(stop_event)
-        # Should exit without hanging
+        # Should exit without hanging or fetching
         self.mock_fetcher.fetch_events.assert_not_awaited()
+
+    async def test_check_and_dispatch_pre_event_alerts_success(self) -> None:
+        # Event at 12:30 UTC
+        event = ForexNewsEvent(
+            title="Core CPI m/m",
+            country="USD",
+            date_utc=datetime(2026, 8, 28, 12, 30, tzinfo=timezone.utc),
+            impact="High",
+            forecast="0.3%",
+            previous="0.2%",
+        )
+        self.service._cached_events = [event]
+        # Current time is 12:02 UTC (28 minutes before 12:30)
+        now_utc = datetime(2026, 8, 28, 12, 2, tzinfo=timezone.utc)
+
+        dispatched = await self.service.check_and_dispatch_pre_event_alerts(now_utc=now_utc)
+        self.assertEqual(len(dispatched), 1)
+        expected_key = self.service.get_event_key(event)
+        self.assertIn(expected_key, dispatched)
+        self.assertIn(expected_key, self.service._alerted_event_keys)
+        self.mock_notifier.send_news_alert.assert_awaited_once()
+
+        # Check message content sent to notifier
+        sent_message = self.mock_notifier.send_news_alert.call_args[0][0]
+        self.assertIn("HIGH-IMPACT NEWS IN 28 MINUTES", sent_message)
+        self.assertIn("XAUUSD (Gold)", sent_message)
+        self.assertIn("Core CPI m/m", sent_message)
+
+    async def test_check_and_dispatch_pre_event_alerts_deduplication(self) -> None:
+        event = ForexNewsEvent(
+            title="Core CPI m/m",
+            country="USD",
+            date_utc=datetime(2026, 8, 28, 12, 30, tzinfo=timezone.utc),
+            impact="High",
+        )
+        self.service._cached_events = [event]
+        now_utc = datetime(2026, 8, 28, 12, 5, tzinfo=timezone.utc)
+
+        # First call dispatches
+        d1 = await self.service.check_and_dispatch_pre_event_alerts(now_utc=now_utc)
+        self.assertEqual(len(d1), 1)
+        self.assertEqual(self.mock_notifier.send_news_alert.await_count, 1)
+
+        # Second call within same window is suppressed
+        d2 = await self.service.check_and_dispatch_pre_event_alerts(now_utc=now_utc)
+        self.assertEqual(len(d2), 0)
+        self.assertEqual(self.mock_notifier.send_news_alert.await_count, 1)
+
+    async def test_check_and_dispatch_pre_event_alerts_ignores_far_future_and_past(self) -> None:
+        far_future = ForexNewsEvent(
+            title="Far Future Event",
+            country="USD",
+            date_utc=datetime(2026, 8, 28, 14, 30, tzinfo=timezone.utc),
+            impact="High",
+        )
+        past_event = ForexNewsEvent(
+            title="Past Event",
+            country="EUR",
+            date_utc=datetime(2026, 8, 28, 11, 0, tzinfo=timezone.utc),
+            impact="High",
+        )
+        self.service._cached_events = [far_future, past_event]
+        # Current time 12:00 UTC (past is -60m, far future is +150m)
+        now_utc = datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc)
+
+        dispatched = await self.service.check_and_dispatch_pre_event_alerts(now_utc=now_utc)
+        self.assertEqual(dispatched, [])
+        self.mock_notifier.send_news_alert.assert_not_awaited()
+        # Past event is marked processed
+        self.assertIn(self.service.get_event_key(past_event), self.service._alerted_event_keys)
+
+    async def test_check_and_dispatch_pre_event_alerts_disabled(self) -> None:
+        self.service.config.pre_event_alert_enabled = False
+        event = ForexNewsEvent(
+            title="Core CPI m/m",
+            country="USD",
+            date_utc=datetime(2026, 8, 28, 12, 30, tzinfo=timezone.utc),
+            impact="High",
+        )
+        self.service._cached_events = [event]
+        now_utc = datetime(2026, 8, 28, 12, 10, tzinfo=timezone.utc)
+
+        dispatched = await self.service.check_and_dispatch_pre_event_alerts(now_utc=now_utc)
+        self.assertEqual(dispatched, [])
+        self.mock_notifier.send_news_alert.assert_not_awaited()
+
+    async def test_date_rollover_clears_alerted_keys(self) -> None:
+        self.service._cached_date = date(2026, 8, 27)
+        self.service._alerted_event_keys.add("USD:Old Event:2026-08-27T12:00:00+00:00")
+
+        self.mock_fetcher.fetch_events.return_value = []
+        await self.service.refresh_today_events()
+
+        # Date rolled over to today -> past alerted keys cleared
+        self.assertEqual(len(self.service._alerted_event_keys), 0)

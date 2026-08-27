@@ -348,6 +348,22 @@ class NewsConfig(BaseModel):
         default_factory=list,
         description="Filter by specific currencies (e.g. ['USD', 'EUR', 'GBP']). Empty list includes all currencies.",
     )
+    pre_event_alert_enabled: bool = Field(
+        default=True,
+        description="Whether to send countdown warnings before high-impact news releases",
+    )
+    pre_event_minutes: int = Field(
+        default=30,
+        ge=1,
+        le=180,
+        description="Minutes before news release to dispatch countdown alert",
+    )
+    poll_interval_seconds: float = Field(
+        default=30.0,
+        ge=5.0,
+        le=300.0,
+        description="Background loop polling interval in seconds for proximity checks",
+    )
     timeout_seconds: float = Field(
         default=15.0,
         gt=1.0,

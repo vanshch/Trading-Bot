@@ -178,6 +178,9 @@ class TestConfigValidation(unittest.TestCase):
         self.assertEqual(cfg.schedule_times, ["08:00", "14:00"])
         self.assertEqual(cfg.timezone, "Asia/Kolkata")
         self.assertEqual(cfg.impact_levels, ["High"])
+        self.assertTrue(cfg.pre_event_alert_enabled)
+        self.assertEqual(cfg.pre_event_minutes, 30)
+        self.assertEqual(cfg.poll_interval_seconds, 30.0)
 
     def test_invalid_news_config_schedule_times(self) -> None:
         # Invalid format
@@ -195,6 +198,19 @@ class TestConfigValidation(unittest.TestCase):
         # Empty schedule
         with self.assertRaises(ValidationError):
             NewsConfig(schedule_times=[])
+
+    def test_invalid_news_config_pre_event_settings(self) -> None:
+        # Invalid pre_event_minutes (< 1 or > 180)
+        with self.assertRaises(ValidationError):
+            NewsConfig(pre_event_minutes=0)
+        with self.assertRaises(ValidationError):
+            NewsConfig(pre_event_minutes=200)
+
+        # Invalid poll_interval_seconds (< 5.0 or > 300.0)
+        with self.assertRaises(ValidationError):
+            NewsConfig(poll_interval_seconds=2.0)
+        with self.assertRaises(ValidationError):
+            NewsConfig(poll_interval_seconds=400.0)
 
 
 

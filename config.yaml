@@ -198,6 +198,9 @@ news:
   timezone: Asia/Kolkata
   impact_levels:
   - High
+  pre_event_alert_enabled: true
+  pre_event_minutes: 30
+  poll_interval_seconds: 30.0
   timeout_seconds: 15.0
   max_retries: 3
   retry_delay_seconds: 3.0
