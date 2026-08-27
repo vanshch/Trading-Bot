@@ -321,6 +321,71 @@ class TelegramConfig(BaseModel):
     )
 
 
+class NewsConfig(BaseModel):
+    """Forex Factory High-Impact (Red Folder) News notification settings."""
+
+    enabled: bool = Field(
+        default=True,
+        description="Whether scheduled high-impact news updates are enabled",
+    )
+    feed_url: str = Field(
+        default="https://nfs.faireconomy.media/ff_calendar_thisweek.json",
+        description="Forex Factory weekly calendar JSON feed URL",
+    )
+    schedule_times: list[str] = Field(
+        default_factory=lambda: ["08:00", "14:00"],
+        description="Scheduled daily update times in 24-hour HH:MM format",
+    )
+    timezone: str = Field(
+        default="Asia/Kolkata",
+        description="Timezone name for scheduling and event timestamp formatting",
+    )
+    impact_levels: list[str] = Field(
+        default_factory=lambda: ["High"],
+        description="Impact ratings to include (e.g. 'High' for Red Folder news)",
+    )
+    currencies: list[str] = Field(
+        default_factory=list,
+        description="Filter by specific currencies (e.g. ['USD', 'EUR', 'GBP']). Empty list includes all currencies.",
+    )
+    timeout_seconds: float = Field(
+        default=15.0,
+        gt=1.0,
+        description="Network timeout for fetching news feed in seconds",
+    )
+    max_retries: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Max retry attempts on transient network failures",
+    )
+    retry_delay_seconds: float = Field(
+        default=3.0,
+        gt=0.0,
+        description="Initial retry delay in seconds for exponential backoff",
+    )
+
+    @field_validator("schedule_times")
+    @classmethod
+    def validate_schedule_times(cls, times: list[str]) -> list[str]:
+        if not times:
+            raise ValueError("schedule_times cannot be empty when news is configured")
+        cleaned = []
+        for t in times:
+            t_str = str(t).strip()
+            parts = t_str.split(":")
+            if len(parts) != 2:
+                raise ValueError(f"Invalid schedule time format '{t_str}'. Must be HH:MM.")
+            try:
+                hour, minute = int(parts[0]), int(parts[1])
+                if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                    raise ValueError
+            except ValueError:
+                raise ValueError(f"Invalid schedule time '{t_str}'. Hours must be 0-23 and minutes 0-59.")
+            cleaned.append(f"{hour:02d}:{minute:02d}")
+        return cleaned
+
+
 class AppConfig(BaseModel):
     """Root application configuration combining YAML config and environment secrets."""
 
@@ -332,6 +397,7 @@ class AppConfig(BaseModel):
     audio: AudioSTTConfig = Field(default_factory=AudioSTTConfig)
     ai: AIConfig = Field(default_factory=AIConfig)
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
+    news: NewsConfig = Field(default_factory=NewsConfig)
 
     # Secrets from environment
     groq_api_key: SecretStr = Field(..., description="Groq Speech-to-Text API key")

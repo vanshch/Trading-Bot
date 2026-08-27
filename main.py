@@ -31,6 +31,7 @@ from src.live_alert_state import LiveAlertStateStore
 from src.live_listener import LiveChannelListener
 from src.logger import get_channel_logger, register_secret_for_redaction, setup_logger
 from src.multimodal_verifier import MultimodalVerifier
+from src.news_monitor import ForexNewsService
 from src.notifier import TelegramNotifier
 from src.session_logger import LiveSessionLogger
 from src.state_tracker import StateTransition, TradeStateTracker
@@ -77,6 +78,11 @@ class TradeMonitoringService:
             bot_token=config.telegram_bot_token.get_secret_value(),
             chat_id=config.telegram_chat_id,
             config=config.telegram,
+        )
+        self.news_service = (
+            ForexNewsService(config=config.news, notifier=self.notifier)
+            if config.news.enabled
+            else None
         )
 
         self._tasks: list[asyncio.Task] = []
@@ -599,6 +605,14 @@ class TradeMonitoringService:
                     )
                     self._tasks.append(task)
 
+            # Decoupled scheduled Forex Factory high-impact news task
+            if self.news_service is not None:
+                news_task = asyncio.create_task(
+                    self.news_service.run(self._stop_event),
+                    name="forex-news-monitor",
+                )
+                self._tasks.append(news_task)
+
             stop_waiter = asyncio.create_task(
                 self._stop_event.wait(), name="shutdown-waiter"
             )
@@ -632,6 +646,8 @@ class TradeMonitoringService:
                 await asyncio.gather(stop_waiter, return_exceptions=True)
             if test_timer is not None:
                 await asyncio.gather(test_timer, return_exceptions=True)
+            if self.news_service is not None:
+                await self.news_service.close()
             for listener in list(self._live_listeners):
                 await listener.close()
             for audio_mgr in list(self._audio_stream_managers):
@@ -701,6 +717,11 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Print summary report of all recorded live stream captures and metrics",
     )
+    parser.add_argument(
+        "--news-now",
+        action="store_true",
+        help="Fetch and dispatch today's Forex Factory high-impact news update immediately to Telegram and exit",
+    )
     return parser.parse_args(args)
 
 
@@ -712,6 +733,32 @@ async def async_main(args: list[str] | None = None) -> int:
         session_logger = LiveSessionLogger()
         session_logger.print_summary_report()
         return 0
+
+    if parsed_args.news_now:
+        try:
+            config = load_config(yaml_path=parsed_args.config, env_path=parsed_args.env)
+        except ConfigurationError as exc:
+            print(f"CONFIGURATION ERROR: {exc}", file=sys.stderr)
+            return 1
+
+        notifier = TelegramNotifier(
+            bot_token=config.telegram_bot_token.get_secret_value(),
+            chat_id=config.telegram_chat_id,
+            config=config.telegram,
+        )
+        news_service = ForexNewsService(config=config.news, notifier=notifier)
+        try:
+            print("Dispatching Forex Factory news update to Telegram...")
+            success = await news_service.dispatch_daily_news_update(session_label="Immediate Brief")
+            if success:
+                print("SUCCESS: Forex Factory news alert sent to Telegram.")
+                return 0
+            else:
+                print("ERROR: Failed to send Telegram news alert.", file=sys.stderr)
+                return 1
+        finally:
+            await news_service.close()
+            await notifier.close()
 
     try:
         config = load_config(yaml_path=parsed_args.config, env_path=parsed_args.env)

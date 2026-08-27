@@ -563,3 +563,14 @@ class TelegramNotifier:
             "disable_web_page_preview": False,
         }
         return await self._post_telegram_request("sendMessage", data=payload)
+
+    async def send_news_alert(self, text: str) -> bool:
+        """Send a formatted Forex Factory news brief to Telegram."""
+        payload = {
+            "chat_id": self.chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        return await self._post_telegram_request("sendMessage", data=payload)
+

@@ -189,3 +189,16 @@ telegram:
   max_retries: 3
   retry_delay_seconds: 2.0
   timeout_seconds: 10.0
+news:
+  enabled: true
+  feed_url: https://nfs.faireconomy.media/ff_calendar_thisweek.json
+  schedule_times:
+  - "08:00"
+  - "14:00"
+  timezone: Asia/Kolkata
+  impact_levels:
+  - High
+  timeout_seconds: 15.0
+  max_retries: 3
+  retry_delay_seconds: 3.0
+

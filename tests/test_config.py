@@ -15,6 +15,7 @@ from src.config import (
     ChannelMode,
     ConfigurationError,
     HSVRange,
+    NewsConfig,
     ROICropConfig,
     load_config,
     mask_secret,
@@ -170,6 +171,31 @@ class TestConfigValidation(unittest.TestCase):
         self.assertEqual(mask_secret(""), "<empty>")
         self.assertEqual(mask_secret("1234"), "***")
         self.assertEqual(mask_secret("my_super_secret_api_key_12345"), "my_...345")
+
+    def test_valid_news_config_defaults(self) -> None:
+        cfg = NewsConfig()
+        self.assertTrue(cfg.enabled)
+        self.assertEqual(cfg.schedule_times, ["08:00", "14:00"])
+        self.assertEqual(cfg.timezone, "Asia/Kolkata")
+        self.assertEqual(cfg.impact_levels, ["High"])
+
+    def test_invalid_news_config_schedule_times(self) -> None:
+        # Invalid format
+        with self.assertRaises(ValidationError):
+            NewsConfig(schedule_times=["8am"])
+
+        # Invalid hours
+        with self.assertRaises(ValidationError):
+            NewsConfig(schedule_times=["25:00"])
+
+        # Invalid minutes
+        with self.assertRaises(ValidationError):
+            NewsConfig(schedule_times=["12:65"])
+
+        # Empty schedule
+        with self.assertRaises(ValidationError):
+            NewsConfig(schedule_times=[])
+
 
 
 class TestLoadConfig(unittest.TestCase):

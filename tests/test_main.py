@@ -1437,6 +1437,32 @@ class TestAsyncMainTestMode(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(exit_code, 0)
         mock_run.assert_awaited_once()
 
+    @patch("main.load_config")
+    @patch("src.news_monitor.ForexNewsService.dispatch_daily_news_update", new_callable=AsyncMock)
+    @patch("src.notifier.TelegramNotifier.close", new_callable=AsyncMock)
+    async def test_async_main_news_now_success(
+        self, mock_close: AsyncMock, mock_dispatch: AsyncMock, mock_load_config: MagicMock
+    ) -> None:
+        mock_load_config.return_value = self.dummy_config
+        mock_dispatch.return_value = True
+
+        exit_code = await async_main(["--news-now"])
+        self.assertEqual(exit_code, 0)
+        mock_dispatch.assert_awaited_once()
+
+    @patch("main.load_config")
+    @patch("src.news_monitor.ForexNewsService.dispatch_daily_news_update", new_callable=AsyncMock)
+    @patch("src.notifier.TelegramNotifier.close", new_callable=AsyncMock)
+    async def test_async_main_news_now_failure(
+        self, mock_close: AsyncMock, mock_dispatch: AsyncMock, mock_load_config: MagicMock
+    ) -> None:
+        mock_load_config.return_value = self.dummy_config
+        mock_dispatch.return_value = False
+
+        exit_code = await async_main(["--news-now"])
+        self.assertEqual(exit_code, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -303,6 +303,19 @@ class TestTelegramNotifier(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result)
         self.assertIn("sendMessage", mock_post.call_args[0][0])
 
+    @patch("aiohttp.ClientSession.post")
+    async def test_send_news_alert_success(self, mock_post: MagicMock) -> None:
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.__aenter__.return_value = mock_response
+        mock_post.return_value = mock_response
+
+        result = await self.notifier.send_news_alert("🔴 <b>FOREX FACTORY NEWS</b>")
+        self.assertTrue(result)
+        self.assertEqual(mock_post.call_count, 1)
+        self.assertIn("sendMessage", mock_post.call_args[0][0])
+
 
 if __name__ == "__main__":
     unittest.main()
+
