@@ -8,7 +8,13 @@ An audio-first monitoring worker that polls YouTube trading channels, translates
 
 ```
 [YouTube Live Stream]
-        ├──► [AudioStreamManager + FFmpeg]
+        ├──► [StreamManager (yt-dlp: liveness check & broadcast metadata)]
+        │              │
+        │              ▼ (canonical public YouTube watch URL)
+        ├──► [AudioStreamManager (Streamlink YouTube plugin, hls-live-edge 3)]
+        │              │ (stdout pipe: raw media)
+        │              ▼
+        │     [FFmpeg PCM Decoder (no -re input throttling)]
         │              │
         │              ▼
         │     [Groq Translations (whisper-large-v3)]
@@ -16,7 +22,7 @@ An audio-first monitoring worker that polls YouTube trading channels, translates
         │              ▼
         │     [Spoken Trigger Detector]
         │              │
-        └──► [Current Chart Screenshot]
+        └──► [Current Chart Screenshot via OpenCV VideoCapture]
                        │
                        ▼
           [Gemini Multimodal Verification]
@@ -27,6 +33,15 @@ An audio-first monitoring worker that polls YouTube trading channels, translates
                        ▼
        [Telegram Alert + Session Metrics]
 ```
+
+### Audio Transport & Streamlink Plugin Ownership
+- **Liveness & Broadcast Metadata**: `StreamManager` (via `yt-dlp`) validates whether the channel is currently live, extracts the broadcast ID, and validates broadcast start timestamps. It also provides frames to `cv2.VideoCapture` for chart screenshot verification.
+- **Playback Resolution Ownership**: Rather than routing audio capture through a client- and session-bound signed Googlevideo media URL, `TradeMonitoringService` passes only the canonical public YouTube watch URL (`https://www.youtube.com/watch?v=VIDEO_ID`) to `AudioStreamManager` and Streamlink. In the measured failure, the manifest still advertised hours of validity while newly referenced media segments returned HTTP 403, so the failure must not be modeled as a simple one-minute expiry timer.
+- **Streamlink YouTube Plugin**: Streamlink's dedicated YouTube plugin resolves playback manifests and maintains live HLS playlist updates. The transport is configured to a proven three-segment live edge (`--hls-live-edge 3`) with bounded ringbuffer buffering (`--ringbuffer-size 64M`) and segmented retry policies.
+- **Unthrottled FFmpeg PCM Decoding**: FFmpeg decodes media piped from Streamlink's stdout directly into 16 kHz mono 16-bit PCM (`pipe:0` -> `pipe:1`). No input throttling (`-re` or `-readrate`) is applied on FFmpeg stdin, preventing desynchronization and synthetic buffer stalls against live transport feeds.
+- **Provider-Aware Failure Fallbacks**:
+  - **YouTube Streams**: When Streamlink fails at startup, exits, stalls, or reaches EOF, the audio capture session terminates cleanly and fails back to the outer supervised restart loop (with exponential backoff and live-status re-resolution). Direct FFmpeg fallback against signed Googlevideo URLs is explicitly disabled for YouTube to prevent HTTP 403 failure loops.
+  - **Non-YouTube Streams**: Generic HLS streams (e.g., custom stream URLs) preserve one-shot direct FFmpeg fallback on Streamlink startup or runtime failures.
 
 ---
 

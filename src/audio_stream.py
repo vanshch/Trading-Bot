@@ -27,6 +27,66 @@ _RATE_LIMIT_PATTERN = re.compile(
 )
 
 
+_YOUTUBE_HOSTNAMES = frozenset(
+    {
+        "youtube.com",
+        "www.youtube.com",
+        "m.youtube.com",
+        "music.youtube.com",
+        "gaming.youtube.com",
+        "youtu.be",
+    }
+)
+
+_STREAMLINK_NATIVE_HOSTNAMES = frozenset(
+    {
+        "twitch.tv",
+        "www.twitch.tv",
+        "m.twitch.tv",
+    }
+)
+
+
+def is_youtube_url(url: str) -> bool:
+    """Classify whether a URL is a public YouTube watch, live, or channel URL using parsed hostnames."""
+    if not url or not isinstance(url, str):
+        return False
+    cleaned = url.strip().removeprefix("hls://")
+    try:
+        parsed = urlparse(cleaned)
+        if (parsed.scheme or "").lower() not in ("http", "https"):
+            return False
+        hostname = (parsed.hostname or "").lower()
+        if not hostname:
+            return False
+        return (
+            hostname in _YOUTUBE_HOSTNAMES
+            or hostname.endswith((".youtube.com", ".youtu.be"))
+        )
+    except (ValueError, TypeError):
+        return False
+
+
+def _is_streamlink_native_url(url: str) -> bool:
+    """Classify whether a URL has a native Streamlink plugin using parsed hostnames."""
+    if is_youtube_url(url):
+        return True
+    cleaned = url.strip().removeprefix("hls://")
+    try:
+        parsed = urlparse(cleaned)
+        if (parsed.scheme or "").lower() not in ("http", "https"):
+            return False
+        hostname = (parsed.hostname or "").lower()
+        if not hostname:
+            return False
+        return (
+            hostname in _STREAMLINK_NATIVE_HOSTNAMES
+            or hostname.endswith(".twitch.tv")
+        )
+    except (ValueError, TypeError):
+        return False
+
+
 class CaptureFailureReason(str, Enum):
     """Structured failure classification for audio stream capture."""
 
@@ -228,6 +288,11 @@ class AudioStreamManager:
             return 0.0
         return self._pcm_bytes_delivered / self.bytes_per_second
 
+    @property
+    def is_youtube(self) -> bool:
+        """Return True if the configured stream URL is a public YouTube URL."""
+        return is_youtube_url(self.stream_url)
+
     def _check_rate_limit(self) -> bool:
         """Inspect sanitized stderr tails for HTTP 429 / Too Many Requests and classify failure."""
         for tail in (self._streamlink_stderr_tail, self._ffmpeg_stderr_tail):
@@ -240,10 +305,11 @@ class AudioStreamManager:
 
     def _build_streamlink_command(self) -> list[str]:
         """Build a resilient transport command that writes media to stdout."""
-        target = self.stream_url
-        if not (
-            "youtube.com" in target or "youtu.be" in target or "twitch.tv" in target
-        ) and not target.startswith("hls://"):
+        target = self.stream_url.strip()
+        if is_youtube_url(target):
+            # Normalize legacy callers while preserving YouTube plugin ownership.
+            target = target.removeprefix("hls://")
+        if not _is_streamlink_native_url(target) and not target.startswith("hls://"):
             target = f"hls://{target}"
 
         return [
@@ -268,7 +334,7 @@ class AudioStreamManager:
             "--stream-segment-timeout",
             "20",
             "--hls-live-edge",
-            "6",
+            "3",
             "--hls-playlist-reload-attempts",
             "10",
             "--hls-playlist-reload-time",
@@ -419,7 +485,11 @@ class AudioStreamManager:
                 return
             except (OSError, subprocess.SubprocessError) as exc:
                 logger.warning(
-                    "Streamlink capture could not start (%s); using direct FFmpeg.", exc
+                    "Streamlink capture could not start (%s); %s.",
+                    exc,
+                    "failing back to supervised restart loop"
+                    if self.is_youtube
+                    else "using direct FFmpeg",
                 )
                 diag = format_diagnostic_tail(self._streamlink_stderr_tail)
                 if diag != "<no stderr output>":
@@ -431,6 +501,18 @@ class AudioStreamManager:
                         "Streamlink startup encountered provider rate limit (HTTP 429)."
                     )
                     return
+                if self.is_youtube:
+                    if self._failure_reason == CaptureFailureReason.NONE:
+                        self._failure_reason = CaptureFailureReason.PROCESS_EXIT
+                    return
+
+        if self.is_youtube:
+            logger.warning(
+                "Direct FFmpeg capture is disabled for YouTube inputs; failing back to supervised restart loop."
+            )
+            if self._failure_reason == CaptureFailureReason.NONE:
+                self._failure_reason = CaptureFailureReason.PROCESS_EXIT
+            return
 
         self._start_direct_ffmpeg()
 
@@ -564,8 +646,8 @@ class AudioStreamManager:
         self._streamlink_process = None
 
     async def _attempt_direct_fallback(self, loop: asyncio.AbstractEventLoop) -> bool:
-        """Stop Streamlink pipeline and attempt direct FFmpeg capture exactly once."""
-        if self._fallback_attempted:
+        """Stop Streamlink pipeline and attempt direct FFmpeg capture exactly once for non-YouTube inputs."""
+        if self._fallback_attempted or self.is_youtube:
             return False
         self._fallback_attempted = True
 
@@ -619,6 +701,8 @@ class AudioStreamManager:
             self._start_capture_processes()
             if self._failure_reason == CaptureFailureReason.PROVIDER_RATE_LIMIT:
                 return
+            if self._process is None:
+                return
 
             self._start_reader_thread(loop)
             consecutive_timeouts = 0
@@ -645,14 +729,28 @@ class AudioStreamManager:
                                 if self._streamlink_process
                                 else None
                             )
-                            logger.warning(
-                                "Streamlink audio capture ended (EOF/exit code %s); attempting direct FFmpeg fallback.",
-                                sl_code,
-                            )
                             diag = format_diagnostic_tail(self._streamlink_stderr_tail)
                             if diag != "<no stderr output>":
                                 logger.warning("Streamlink diagnostic:\n%s", diag)
 
+                            if self.is_youtube:
+                                logger.warning(
+                                    "Streamlink audio capture ended for YouTube (EOF/exit code %s); "
+                                    "failing back to supervised restart loop without direct FFmpeg.",
+                                    sl_code,
+                                )
+                                if not self._check_rate_limit():
+                                    self._failure_reason = (
+                                        CaptureFailureReason.EOF
+                                        if sl_code in (0, None)
+                                        else CaptureFailureReason.PROCESS_EXIT
+                                    )
+                                break
+
+                            logger.warning(
+                                "Streamlink audio capture ended (EOF/exit code %s); attempting direct FFmpeg fallback.",
+                                sl_code,
+                            )
                             fallback_ok = await self._attempt_direct_fallback(loop)
                             if fallback_ok:
                                 consecutive_timeouts = 0
@@ -709,14 +807,31 @@ class AudioStreamManager:
                                 if sl_exited
                                 else ("FFmpeg exited" if ff_exited else "stalled")
                             )
-                            logger.warning(
-                                "Streamlink capture %s; attempting direct FFmpeg fallback.",
-                                reason,
-                            )
                             diag = format_diagnostic_tail(self._streamlink_stderr_tail)
                             if diag != "<no stderr output>":
                                 logger.warning("Streamlink diagnostic:\n%s", diag)
 
+                            if self.is_youtube:
+                                logger.warning(
+                                    "Streamlink capture %s for YouTube; "
+                                    "failing back to supervised restart loop without direct FFmpeg.",
+                                    reason,
+                                )
+                                if not self._check_rate_limit():
+                                    if sl_exited or ff_exited:
+                                        self._failure_reason = (
+                                            CaptureFailureReason.PROCESS_EXIT
+                                        )
+                                    else:
+                                        self._failure_reason = (
+                                            CaptureFailureReason.TIMEOUT
+                                        )
+                                break
+
+                            logger.warning(
+                                "Streamlink capture %s; attempting direct FFmpeg fallback.",
+                                reason,
+                            )
                             fallback_ok = await self._attempt_direct_fallback(loop)
                             if fallback_ok:
                                 consecutive_timeouts = 0

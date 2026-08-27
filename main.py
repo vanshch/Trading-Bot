@@ -162,20 +162,25 @@ class TradeMonitoringService:
                     )
 
                 # 2. Start Real-time Audio Stream Capture
-                direct_url = stream_mgr.current_stream_url or stream_url
-                if not direct_url:
+                resolved_media_url = stream_mgr.current_stream_url or stream_url
+                if not resolved_media_url:
                     await asyncio.sleep(2.0)
                     continue
 
                 audio_input_url = (
                     f"https://www.youtube.com/watch?v={stream_mgr.broadcast_id}"
                     if stream_mgr.broadcast_id
-                    else (channel.url or direct_url)
+                    else channel.url
                 )
+                if not audio_input_url:
+                    ch_logger.warning(
+                        "Cannot start YouTube audio capture without a canonical public URL."
+                    )
+                    await asyncio.sleep(2.0)
+                    continue
 
                 audio_mgr = AudioStreamManager(
                     stream_url=audio_input_url,
-                    direct_url=direct_url,
                     chunk_duration_seconds=chunk_duration,
                 )
                 self._audio_stream_managers.append(audio_mgr)

@@ -689,12 +689,12 @@ class TestTradeMonitoringService(unittest.IsolatedAsyncioTestCase):
 
     @patch("main.AudioStreamManager")
     @patch("src.stream_manager.StreamManager.check_live_status", new_callable=AsyncMock)
-    async def test_direct_url_propagated_to_audio_manager(
+    async def test_youtube_audio_manager_receives_only_canonical_public_url(
         self,
         mock_check_live: AsyncMock,
         mock_audio_mgr_class: MagicMock,
     ) -> None:
-        """monitor_channel passes direct_url from StreamManager to AudioStreamManager."""
+        """YouTube audio ownership excludes the signed media URL from AudioStreamManager."""
         mock_check_live.return_value = (
             StreamStatus.LIVE,
             "https://manifest.googlevideo.com/hls_live/stream.m3u8",
@@ -723,11 +723,12 @@ class TestTradeMonitoringService(unittest.IsolatedAsyncioTestCase):
 
         self.assertGreaterEqual(mock_audio_mgr_class.call_count, 1)
         call_kwargs = mock_audio_mgr_class.call_args.kwargs
+        self.assertNotIn("direct_url", call_kwargs)
         self.assertEqual(
-            call_kwargs.get("direct_url"),
-            "https://manifest.googlevideo.com/hls_live/stream.m3u8",
+            call_kwargs.get("stream_url"),
+            "https://www.youtube.com/@LiveTrader/live",
         )
-        self.assertIn("stream_url", call_kwargs)
+        self.assertNotIn("manifest.googlevideo.com", call_kwargs["stream_url"])
         self.assertNotIn("url_refresher", call_kwargs)
 
     @patch("main.AudioStreamManager")

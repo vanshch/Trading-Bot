@@ -186,3 +186,47 @@ AGY's delegated changes passed its reported 323-test suite, but independent revi
 - `python -m compileall -q src scripts main.py benchmark.py`: passed.
 - `git diff --check`: passed.
 - No live provider calls were made during implementation or testing.
+
+---
+
+## 9. August 27, 2026: Streamlink-Owned YouTube Resolution and Provider-Aware Transports
+
+### Production evidence that triggered the work
+
+- Prior trials attempting to route YouTube live audio through pre-resolved signed Google Video media URLs (`hls://<signed-googlevideo-url>`) failed at approximately 55 seconds with four consecutive HTTP 403 segment errors and delivered only ~30.5% audio coverage.
+- Signed playback URLs are bound to client/session/IP context and are not durable application interfaces. In this incident the manifest advertised roughly six hours of remaining validity, yet newly referenced segments still returned HTTP 403 after about 55 seconds; the evidence does not support a simple one-minute URL-expiry explanation.
+- The isolated empirical trial (`scratch/streamlink_plugin_ownership_trial`) proved the plugin ownership model: passing the canonical public YouTube watch URL directly to Streamlink's dedicated YouTube plugin delivered exactly 180 seconds, 100% audio coverage (18 complete 10-second WAV chunks), zero HTTP 403 errors, and zero HTTP 429 rate limits.
+
+### Generalizable architecture and engineering lessons
+
+1. **URL Ownership Across Tool Boundaries**:
+   - Decouple initial liveness probes from transport resolution. `yt-dlp`/`StreamManager` owns broadcast metadata (liveness state, video ID, broadcast start time), while the streaming engine (Streamlink's YouTube plugin) must own playback resolution, token acquisition, and playlist lifecycle management.
+   - Never pass a pre-resolved CDN media URL into a specialized transport plugin. Passing the canonical public URL (`https://www.youtube.com/watch?v=...`) allows the plugin's internal session management, signature extraction, and playlist reload loop to function as engineered.
+
+2. **The Hazard of Ephemeral Signed URLs**:
+   - Cloud media CDNs (Googlevideo, Cloudflare Stream, Akamai) sign manifests and segments with ephemeral parameters (`expire`, `signature`, `sparams`, client IP bindings).
+   - Treating a signed URL as a durable endpoint can lead to systematic mid-stream failures (HTTP 403 Forbidden). Downstream generic HLS tools do not own the provider-specific client identity and playback-resolution lifecycle needed when subsequent segment access changes.
+
+3. **Failure-Boundary Live Probes as Decision Evidence**:
+   - Complex transport transitions should be validated through bounded, isolated scratch runners with concrete metrics (duration, coverage percentage, chunk integrity, HTTP error distributions) before touching production services.
+   - Quantitative baseline evidence (180s capture, 18 complete chunks, zero 403s vs 55s, 4 403s, 30.5% coverage) provides an indisputable empirical basis for architectural decisions and protects against speculative refactoring.
+
+4. **Provider-Aware Fallback Hierarchies**:
+   - Fallback strategies must not be applied blindly across heterogeneous providers.
+   - For generic HLS streams with stable media URLs, a one-shot direct FFmpeg fallback provides valuable resiliency against local Streamlink crashes or environment glitches.
+   - For YouTube, however, direct FFmpeg against an expired or signed Googlevideo URL guarantees an immediate HTTP 403 loop. The capture layer must detect YouTube inputs via robust parsed-hostname classification and fail back directly to the outer supervised monitoring loop (exponential backoff, status re-resolution, fresh stream acquisition) rather than invoking direct FFmpeg.
+
+5. **FFmpeg Live-Input Throttling Antipattern**:
+   - When decoding live streaming media delivered over standard input (`pipe:0`) from a live transport (Streamlink), never configure `-re` or `-readrate`.
+   - The upstream provider and transport already throttle data arrival to real-time broadcast speed. Introducing FFmpeg input rate-limiting creates an artificial bottleneck, accumulates unconsumed data in the stdin OS pipe buffer, introduces latency drift, and induces synthetic timeout stalls in downstream chunk readers.
+
+### Regression checklist for future transport work
+
+- [ ] Use parsed hostnames (`urlparse(url).hostname`) and explicit domain allow-lists rather than substring checks (`"youtube.com" in url`) to classify stream providers.
+- [ ] Ensure public canonical URLs are forwarded to transport plugins; do not inject `hls://` prefixes onto URLs that have native plugin handlers.
+- [ ] Configure Streamlink HLS live edge to the empirically proven 3 segments (`--hls-live-edge 3`) for minimal latency with buffer stability.
+- [ ] Verify that FFmpeg stdin decoding omits `-re` and `-readrate`.
+- [ ] For YouTube inputs, verify negative fallback guarantees: Streamlink startup errors, runtime exits, stalls, and EOF must fail back to the supervisor without spawning direct FFmpeg.
+- [ ] For non-YouTube inputs, verify that one-shot direct FFmpeg fallback remains functional at startup and runtime.
+- [ ] Verify that HTTP 429 errors from stderr are classified as `PROVIDER_RATE_LIMIT` and trigger provider cooldown rather than immediate restart loops.
+- [ ] Maintain deterministic subprocess termination, pipe closure, and thread joining in `stop()`.

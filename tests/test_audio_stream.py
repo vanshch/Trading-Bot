@@ -14,6 +14,7 @@ from src.audio_stream import (
     RestartBackoffTracker,
     format_diagnostic_tail,
     is_rate_limit_diagnostic,
+    is_youtube_url,
     sanitize_diagnostic,
 )
 from src.logger import register_secret_for_redaction
@@ -45,7 +46,7 @@ class TestAudioStreamManager(unittest.IsolatedAsyncioTestCase):
             "--stream-segment-attempts": "5",
             "--stream-segment-threads": "1",
             "--stream-segment-timeout": "20",
-            "--hls-live-edge": "6",
+            "--hls-live-edge": "3",
             "--hls-playlist-reload-attempts": "10",
             "--hls-playlist-reload-time": "segment",
             "--stream-segmented-queue-deadline": "0",
@@ -241,8 +242,8 @@ class TestAudioStreamManager(unittest.IsolatedAsyncioTestCase):
         ff_proc2.stdout.read.side_effect = [chunk2, b""]
 
         manager = AudioStreamManager(
-            stream_url="https://www.youtube.com/watch?v=sample123",
-            direct_url="https://manifest.googlevideo.com/api/manifest/hls_live/stream.m3u8",
+            stream_url="https://media.example/live.m3u8",
+            direct_url="https://media.example/fallback.m3u8",
             chunk_duration_seconds=5.0,
         )
 
@@ -263,7 +264,7 @@ class TestAudioStreamManager(unittest.IsolatedAsyncioTestCase):
         # Direct FFmpeg used the resolved direct URL
         fallback_cmd = popen.call_args_list[2].args[0]
         self.assertIn(
-            "https://manifest.googlevideo.com/api/manifest/hls_live/stream.m3u8",
+            "https://media.example/fallback.m3u8",
             fallback_cmd,
         )
         self.assertIn("-reconnect", fallback_cmd)
@@ -370,8 +371,8 @@ class TestAudioStreamManager(unittest.IsolatedAsyncioTestCase):
         ff_proc2.stdout.read.side_effect = [chunk2, b""]
 
         manager = AudioStreamManager(
-            stream_url="https://www.youtube.com/watch?v=sample123",
-            direct_url="https://manifest.googlevideo.com/initial_cached.m3u8",
+            stream_url="https://media.example/live.m3u8",
+            direct_url="https://media.example/initial_cached.m3u8",
             chunk_duration_seconds=5.0,
         )
 
@@ -388,11 +389,11 @@ class TestAudioStreamManager(unittest.IsolatedAsyncioTestCase):
         # Fallback FFmpeg used the cached direct URL directly without calling any resolver
         fallback_cmd = popen.call_args_list[2].args[0]
         self.assertIn(
-            "https://manifest.googlevideo.com/initial_cached.m3u8",
+            "https://media.example/initial_cached.m3u8",
             fallback_cmd,
         )
         self.assertEqual(
-            manager.direct_url, "https://manifest.googlevideo.com/initial_cached.m3u8"
+            manager.direct_url, "https://media.example/initial_cached.m3u8"
         )
 
     async def test_runtime_stall_uses_initial_direct_url_without_resolver(
@@ -461,8 +462,8 @@ class TestAudioStreamManager(unittest.IsolatedAsyncioTestCase):
         direct_process.wait.return_value = 0
 
         manager = AudioStreamManager(
-            stream_url="https://www.youtube.com/watch?v=sample123",
-            direct_url="https://manifest.googlevideo.com/initial_fresh.m3u8",
+            stream_url="https://media.example/live.m3u8",
+            direct_url="https://media.example/initial_fresh.m3u8",
         )
 
         with patch(
@@ -475,12 +476,12 @@ class TestAudioStreamManager(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(popen.call_count, 2)
         fallback_command = popen.call_args_list[1].args[0]
         self.assertIn(
-            "https://manifest.googlevideo.com/initial_fresh.m3u8",
+            "https://media.example/initial_fresh.m3u8",
             fallback_command,
         )
         self.assertEqual(
             manager.direct_url,
-            "https://manifest.googlevideo.com/initial_fresh.m3u8",
+            "https://media.example/initial_fresh.m3u8",
         )
 
     async def test_streamlink_stderr_429_classifies_provider_rate_limit(
@@ -574,7 +575,7 @@ class TestAudioStreamManager(unittest.IsolatedAsyncioTestCase):
         ff_proc.stdout.read.side_effect = [chunk1, chunk2, b""]
 
         manager = AudioStreamManager(
-            stream_url="https://www.youtube.com/watch?v=sample123",
+            stream_url="https://media.example/live.m3u8",
             use_streamlink=False,
             chunk_duration_seconds=5.0,
         )
@@ -1174,6 +1175,323 @@ class TestRestartBackoffTracker(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(selected_delay, 120.0)
         self.assertLess(elapsed, 0.5)
+
+
+class TestStreamlinkYouTubeOwnership(unittest.IsolatedAsyncioTestCase):
+    """Focused regression tests for Streamlink-owned YouTube playback resolution.
+
+    Verifies:
+    1. Robust URL classification for public YouTube watch/live/channel URLs using parsed hostnames.
+    2. Canonical public YouTube URL passed to Streamlink without hls:// prefix.
+    3. Proven 3-segment live edge configured on Streamlink.
+    4. FFmpeg stdin decoding free of -re/-readrate throttling.
+    5. Positive ownership streaming path: Streamlink -> FFmpeg stdout pipe yields chunks.
+    6. Negative no-direct-fallback guarantee on YouTube startup failure.
+    7. Negative no-direct-fallback guarantee on YouTube startup rate-limit.
+    8. Negative no-direct-fallback guarantee on YouTube runtime exit.
+    9. Negative no-direct-fallback guarantee on YouTube runtime EOF.
+    10. Negative no-direct-fallback guarantee on YouTube runtime stall.
+    11. Negative no-direct-fallback guarantee via _attempt_direct_fallback.
+    12. Negative no-direct-fallback guarantee when use_streamlink=False for YouTube.
+    """
+
+    def test_is_youtube_url_classification_matrix(self) -> None:
+        """Verify robust URL classification using parsed hostnames rather than substring matching."""
+        positive_urls = [
+            "https://www.youtube.com/watch?v=Nq2wYlWFucg",
+            "https://youtube.com/watch?v=Nq2wYlWFucg",
+            "https://m.youtube.com/watch?v=Nq2wYlWFucg",
+            "https://music.youtube.com/watch?v=Nq2wYlWFucg",
+            "https://gaming.youtube.com/watch?v=Nq2wYlWFucg",
+            "https://youtu.be/Nq2wYlWFucg",
+            "https://www.youtube.com/@tradewithmehaktrades/live",
+            "https://www.youtube.com/live/Nq2wYlWFucg",
+            "https://www.youtube.com/channel/UC1234567890",
+            "https://www.youtube.com/c/MehakTrades",
+            "https://www.youtube.com/embed/Nq2wYlWFucg",
+            "https://www.youtube.com:443/watch?v=Nq2wYlWFucg",
+            "http://www.youtube.com/watch?v=Nq2wYlWFucg",
+            "  https://www.youtube.com/watch?v=Nq2wYlWFucg  ",
+            "hls://https://www.youtube.com/watch?v=Nq2wYlWFucg",
+        ]
+        for url in positive_urls:
+            with self.subTest(url=url):
+                self.assertTrue(
+                    is_youtube_url(url),
+                    f"Expected {url} to be classified as YouTube URL",
+                )
+
+        negative_urls = [
+            "https://manifest.googlevideo.com/api/manifest/hls_live/stream.m3u8",
+            "https://rr2---sn-ab5sznzl.googlevideo.com/videoplayback?expire=123",
+            "https://media.example/live.m3u8",
+            "https://notyoutube.com/watch?v=Nq2wYlWFucg",
+            "https://youtube.com.attacker.example/watch?v=Nq2wYlWFucg",
+            "https://fakeyoutube.com/watch?v=Nq2wYlWFucg",
+            "https://attacker.example/youtube.com/live",
+            "https://attacker.example/search?q=youtube.com",
+            "https://twitch.tv/liveuser",
+            "https://www.twitch.tv/liveuser",
+            "file:///path/to/youtube.com",
+            "",
+            "   ",
+            None,
+            12345,
+        ]
+        for url in negative_urls:
+            with self.subTest(url=url):
+                self.assertFalse(
+                    is_youtube_url(url),
+                    f"Expected {url} NOT to be classified as YouTube URL",
+                )
+
+    def test_youtube_ownership_command_options_and_no_ffmpeg_throttling(self) -> None:
+        """Streamlink receives canonical public YouTube URL at 3-segment live edge; FFmpeg stdin has no -re."""
+        watch_url = "https://www.youtube.com/watch?v=Nq2wYlWFucg"
+        manager = AudioStreamManager(watch_url)
+
+        self.assertTrue(manager.is_youtube)
+
+        # Streamlink command verification
+        sl_cmd = manager._build_streamlink_command()
+        self.assertEqual(sl_cmd[:3], [sys.executable, "-m", "streamlink"])
+        self.assertIn("--stdout", sl_cmd)
+        self.assertIn(watch_url, sl_cmd)
+        self.assertNotIn(f"hls://{watch_url}", sl_cmd)
+
+        legacy_prefixed = AudioStreamManager(f"hls://{watch_url}")
+        legacy_sl_cmd = legacy_prefixed._build_streamlink_command()
+        self.assertIn(watch_url, legacy_sl_cmd)
+        self.assertNotIn(f"hls://{watch_url}", legacy_sl_cmd)
+
+        # Proven 3-segment live edge
+        self.assertIn("--hls-live-edge", sl_cmd)
+        edge_idx = sl_cmd.index("--hls-live-edge")
+        self.assertEqual(sl_cmd[edge_idx + 1], "3")
+
+        # Buffering and retry flags
+        self.assertIn("--ringbuffer-size", sl_cmd)
+        self.assertIn("--retry-open", sl_cmd)
+        self.assertIn("--stream-segment-attempts", sl_cmd)
+        self.assertEqual(sl_cmd[-1], "audio_only,worst")
+
+        # FFmpeg stdin command: decode only, NO input rate throttling (-re or -readrate)
+        ff_cmd = manager._build_ffmpeg_command(input_from_stdin=True)
+        self.assertIn("pipe:0", ff_cmd)
+        self.assertNotIn("-re", ff_cmd)
+        self.assertNotIn("-readrate", ff_cmd)
+        self.assertIn("-acodec", ff_cmd)
+        self.assertIn("pcm_s16le", ff_cmd)
+        self.assertEqual(ff_cmd[-1], "pipe:1")
+
+    async def test_youtube_positive_ownership_streaming_pipeline(self) -> None:
+        """Positive path: Streamlink-owned transport decodes audio to stdout without direct FFmpeg fallback."""
+        chunk1 = b"\x01\x02" * 80000
+        chunk2 = b"\x03\x04" * 80000
+
+        sl_proc = MagicMock()
+        sl_proc.poll.return_value = 0
+        sl_proc.wait.return_value = 0
+        sl_proc.stderr.readline.return_value = b""
+
+        ff_proc = MagicMock()
+        ff_proc.poll.return_value = 0
+        ff_proc.wait.return_value = 0
+        ff_proc.stderr.readline.return_value = b""
+        ff_proc.stdout.read.side_effect = [chunk1, chunk2, b""]
+
+        manager = AudioStreamManager(
+            stream_url="https://www.youtube.com/watch?v=Nq2wYlWFucg",
+            direct_url="https://manifest.googlevideo.com/api/manifest/hls_live/stream.m3u8",
+            chunk_duration_seconds=5.0,
+        )
+
+        with patch(
+            "src.audio_stream.subprocess.Popen",
+            side_effect=[sl_proc, ff_proc],
+        ) as popen:
+            collected = [c async for c in manager.stream_audio_chunks()]
+
+        # Both chunks yielded through Streamlink transport
+        self.assertEqual(len(collected), 2)
+        self.assertEqual(collected[0], chunk1)
+        self.assertEqual(collected[1], chunk2)
+
+        # Exactly 2 processes spawned (Streamlink + piped FFmpeg); NO direct FFmpeg fallback
+        self.assertEqual(popen.call_count, 2)
+        self.assertEqual(manager.pcm_bytes_delivered, len(chunk1) + len(chunk2))
+        self.assertEqual(manager.failure_reason, CaptureFailureReason.EOF)
+
+    async def test_youtube_startup_failure_negative_no_direct_fallback(self) -> None:
+        """Negative guarantee: YouTube Streamlink startup failure fails back to supervisor without direct FFmpeg."""
+        manager = AudioStreamManager(
+            stream_url="https://www.youtube.com/watch?v=Nq2wYlWFucg",
+            direct_url="https://manifest.googlevideo.com/api/manifest/hls_live/stream.m3u8",
+        )
+
+        with patch(
+            "src.audio_stream.subprocess.Popen",
+            side_effect=OSError("streamlink launch failure"),
+        ) as popen:
+            chunks = [c async for c in manager.stream_audio_chunks()]
+
+        self.assertEqual(chunks, [])
+        # Exactly ONE call: Streamlink launch failed, direct FFmpeg was NEVER called
+        self.assertEqual(popen.call_count, 1)
+        self.assertEqual(manager.failure_reason, CaptureFailureReason.PROCESS_EXIT)
+
+    async def test_youtube_startup_rate_limit_negative_no_direct_fallback(self) -> None:
+        """Negative guarantee: YouTube Streamlink startup 429 classifies correctly and skips direct FFmpeg."""
+        manager = AudioStreamManager(
+            stream_url="https://www.youtube.com/watch?v=Nq2wYlWFucg",
+            direct_url="https://manifest.googlevideo.com/api/manifest/hls_live/stream.m3u8",
+        )
+        manager._streamlink_stderr_tail.append(
+            "error: Unable to open URL: https://youtube.com/... (429 Client Error: Too Many Requests)"
+        )
+
+        with patch(
+            "src.audio_stream.subprocess.Popen",
+            side_effect=OSError("streamlink launch failure"),
+        ) as popen:
+            chunks = [c async for c in manager.stream_audio_chunks()]
+
+        self.assertEqual(chunks, [])
+        self.assertEqual(popen.call_count, 1)
+        self.assertEqual(
+            manager.failure_reason, CaptureFailureReason.PROVIDER_RATE_LIMIT
+        )
+
+    async def test_youtube_runtime_exit_negative_no_direct_fallback(self) -> None:
+        """Negative guarantee: YouTube Streamlink exit mid-capture fails back to supervisor without direct FFmpeg."""
+        chunk1 = b"\x01\x02" * 80000
+
+        sl_proc = MagicMock()
+        sl_proc.poll.return_value = 1  # exited with error
+        sl_proc.wait.return_value = 1
+        sl_proc.returncode = 1
+        sl_proc.stderr.readline.return_value = b""
+
+        ff_proc = MagicMock()
+        ff_proc.poll.return_value = 0
+        ff_proc.wait.return_value = 0
+        ff_proc.stderr.readline.return_value = b""
+        ff_proc.stdout.read.side_effect = [chunk1, b""]
+
+        manager = AudioStreamManager(
+            stream_url="https://www.youtube.com/watch?v=Nq2wYlWFucg",
+            direct_url="https://manifest.googlevideo.com/api/manifest/hls_live/stream.m3u8",
+            chunk_duration_seconds=5.0,
+        )
+
+        with patch(
+            "src.audio_stream.subprocess.Popen",
+            side_effect=[sl_proc, ff_proc],
+        ) as popen:
+            collected = [c async for c in manager.stream_audio_chunks()]
+
+        # Yielded chunk1 before exit, did NOT attempt direct FFmpeg
+        self.assertEqual(len(collected), 1)
+        self.assertEqual(collected[0], chunk1)
+        # Exactly 2 calls (Streamlink + piped FFmpeg); NO third Popen for direct FFmpeg
+        self.assertEqual(popen.call_count, 2)
+        self.assertEqual(manager.failure_reason, CaptureFailureReason.PROCESS_EXIT)
+
+    async def test_youtube_runtime_eof_negative_no_direct_fallback(self) -> None:
+        """Negative guarantee: YouTube Streamlink EOF fails back to supervisor without direct FFmpeg."""
+        chunk1 = b"\x01\x02" * 80000
+
+        sl_proc = MagicMock()
+        sl_proc.poll.return_value = 0  # clean EOF
+        sl_proc.wait.return_value = 0
+        sl_proc.returncode = 0
+        sl_proc.stderr.readline.return_value = b""
+
+        ff_proc = MagicMock()
+        ff_proc.poll.return_value = 0
+        ff_proc.wait.return_value = 0
+        ff_proc.stderr.readline.return_value = b""
+        ff_proc.stdout.read.side_effect = [chunk1, b""]
+
+        manager = AudioStreamManager(
+            stream_url="https://www.youtube.com/watch?v=Nq2wYlWFucg",
+            direct_url="https://manifest.googlevideo.com/api/manifest/hls_live/stream.m3u8",
+            chunk_duration_seconds=5.0,
+        )
+
+        with patch(
+            "src.audio_stream.subprocess.Popen",
+            side_effect=[sl_proc, ff_proc],
+        ) as popen:
+            collected = [c async for c in manager.stream_audio_chunks()]
+
+        self.assertEqual(len(collected), 1)
+        self.assertEqual(collected[0], chunk1)
+        self.assertEqual(popen.call_count, 2)
+        self.assertEqual(manager.failure_reason, CaptureFailureReason.EOF)
+
+    async def test_youtube_runtime_stall_negative_no_direct_fallback(self) -> None:
+        """Negative guarantee: YouTube Streamlink stall fails back to supervisor without direct FFmpeg."""
+        sl_proc = MagicMock()
+        sl_proc.poll.return_value = None  # alive but stalled
+        sl_proc.wait.return_value = 0
+        sl_proc.stderr.readline.return_value = b""
+
+        ff_proc = MagicMock()
+        ff_proc.poll.return_value = None
+        ff_proc.wait.return_value = 0
+        ff_proc.stderr.readline.return_value = b""
+
+        manager = AudioStreamManager(
+            stream_url="https://www.youtube.com/watch?v=Nq2wYlWFucg",
+            direct_url="https://manifest.googlevideo.com/api/manifest/hls_live/stream.m3u8",
+            chunk_duration_seconds=0.01,
+            max_consecutive_timeouts=1,
+        )
+        queue = MagicMock()
+        queue.get = AsyncMock(side_effect=asyncio.TimeoutError)
+
+        with (
+            patch(
+                "src.audio_stream.subprocess.Popen",
+                side_effect=[sl_proc, ff_proc],
+            ) as popen,
+            patch("src.audio_stream.asyncio.Queue", return_value=queue),
+        ):
+            chunks = [c async for c in manager.stream_audio_chunks()]
+
+        self.assertEqual(chunks, [])
+        # Exactly 2 calls; NO third Popen for direct FFmpeg
+        self.assertEqual(popen.call_count, 2)
+        self.assertEqual(manager.failure_reason, CaptureFailureReason.TIMEOUT)
+
+    async def test_youtube_attempt_direct_fallback_always_returns_false(self) -> None:
+        """Direct fallback method returns False immediately for YouTube inputs without spawning processes."""
+        manager = AudioStreamManager(
+            stream_url="https://www.youtube.com/watch?v=Nq2wYlWFucg",
+            direct_url="https://manifest.googlevideo.com/api/manifest/hls_live/stream.m3u8",
+        )
+
+        with patch("src.audio_stream.subprocess.Popen") as popen:
+            res = await manager._attempt_direct_fallback(asyncio.get_running_loop())
+
+        self.assertFalse(res)
+        self.assertEqual(popen.call_count, 0)
+
+    async def test_youtube_use_streamlink_false_disables_direct_ffmpeg(self) -> None:
+        """Negative guarantee: Initializing with use_streamlink=False on a YouTube URL never spawns direct FFmpeg."""
+        manager = AudioStreamManager(
+            stream_url="https://www.youtube.com/watch?v=Nq2wYlWFucg",
+            direct_url="https://manifest.googlevideo.com/api/manifest/hls_live/stream.m3u8",
+            use_streamlink=False,
+        )
+
+        with patch("src.audio_stream.subprocess.Popen") as popen:
+            chunks = [c async for c in manager.stream_audio_chunks()]
+
+        self.assertEqual(chunks, [])
+        self.assertEqual(popen.call_count, 0)
+        self.assertEqual(manager.failure_reason, CaptureFailureReason.PROCESS_EXIT)
 
 
 if __name__ == "__main__":
