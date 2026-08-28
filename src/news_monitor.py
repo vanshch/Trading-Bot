@@ -221,51 +221,51 @@ def format_daily_news_message(
     session_label: str = "Daily Brief",
 ) -> str:
     """Construct formatted Telegram HTML message for daily high-impact economic news."""
-    tz_abbr = target_tz.key if hasattr(target_tz, "key") else "IST"
-    date_str = target_date.strftime("%A, %d %b %Y")
-    label_text = f" ({session_label})" if session_label else ""
+    tz_name = (
+        target_tz.key
+        if hasattr(target_tz, "key") and target_tz.key
+        else str(target_tz)
+    )
+    date_str = target_date.strftime("%a, %d %b %Y")
 
-    lines = [
-        "🔴 <b>FOREX FACTORY: HIGH-IMPACT NEWS</b>",
-        f"📅 <b>Date:</b> {html.escape(date_str)}{html.escape(label_text)}",
-        "━━━━━━━━━━━━━━━━━━━━",
-    ]
+    header_line = f"<b>FOREX NEWS — {html.escape(date_str)}</b>"
+    if session_label and session_label.strip():
+        sub_header = (
+            f"High impact · {html.escape(tz_name)} · "
+            f"{html.escape(session_label.strip())}"
+        )
+    else:
+        sub_header = f"High impact · {html.escape(tz_name)}"
+
+    header_block = f"{header_line}\n{sub_header}"
 
     if not events:
-        lines.extend([
-            "✅ <i>No Red Folder (High-Impact) news events scheduled for today.</i>",
-            "━━━━━━━━━━━━━━━━━━━━",
-            "🛡️ <i>Regular trading conditions expected.</i>",
-        ])
-        return "\n".join(lines)
+        return f"{header_block}\n\n<i>No high-impact events today.</i>"
 
-    for i, event in enumerate(events):
+    blocks = [header_block]
+    for event in events:
         local_dt = event.date_utc.astimezone(target_tz)
-        time_str = local_dt.strftime("%I:%M %p")
+        time_str = local_dt.strftime("%I:%M %p").lstrip("0")
         flag = CURRENCY_FLAGS.get(event.country, "🌐")
 
-        lines.append(f"⏰ <b>{time_str} {tz_abbr}</b> | {flag} <b>{html.escape(event.country)}</b>")
-        lines.append(f"📌 <b>{html.escape(event.title)}</b>")
+        event_lines = [
+            f"<b>{time_str} · {html.escape(event.country)}</b> {flag}",
+            html.escape(event.title),
+        ]
 
         details: list[str] = []
         if event.forecast:
-            details.append(f"<i>Forecast:</i> <code>{html.escape(event.forecast)}</code>")
+            details.append(f"Forecast <code>{html.escape(event.forecast)}</code>")
         if event.previous:
-            details.append(f"<i>Previous:</i> <code>{html.escape(event.previous)}</code>")
+            details.append(f"Previous <code>{html.escape(event.previous)}</code>")
 
         if details:
-            lines.append(f"📊 {' | '.join(details)}")
-        else:
-            lines.append("📊 <i>Impact:</i> <b>High (Red Folder)</b>")
+            event_lines.append(" · ".join(details))
 
-        if i < len(events) - 1:
-            lines.append("────────────────────")
+        blocks.append("\n".join(event_lines))
 
-    lines.extend([
-        "━━━━━━━━━━━━━━━━━━━━",
-        "⚠️ <i>Expect heightened market volatility and spread widening around release times.</i>",
-    ])
-    return "\n".join(lines)
+    blocks.append("<i>Expect volatility around release times.</i>")
+    return "\n\n".join(blocks)
 
 
 def format_pre_event_warning_message(

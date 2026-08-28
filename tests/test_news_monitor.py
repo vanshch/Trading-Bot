@@ -184,9 +184,12 @@ class TestFormatDailyNewsMessage(unittest.TestCase):
             target_tz=self.tz,
             session_label="Morning Brief",
         )
-        self.assertIn("FOREX FACTORY: HIGH-IMPACT NEWS", msg)
-        self.assertIn("No Red Folder (High-Impact) news", msg)
-        self.assertIn("Thursday, 27 Aug 2026 (Morning Brief)", msg)
+        self.assertEqual(
+            msg,
+            "<b>FOREX NEWS — Thu, 27 Aug 2026</b>\n"
+            "High impact · Asia/Kolkata · Morning Brief\n\n"
+            "<i>No high-impact events today.</i>",
+        )
 
     def test_format_with_events_and_html_escaping(self) -> None:
         event = ForexNewsEvent(
@@ -203,11 +206,17 @@ class TestFormatDailyNewsMessage(unittest.TestCase):
             target_tz=self.tz,
             session_label="Morning Brief",
         )
-        self.assertIn("🇺🇸 <b>USD</b>", msg)
-        self.assertIn("Core CPI &lt;m/m&gt; &amp; Rates", msg)
-        self.assertIn("06:00 PM Asia/Kolkata", msg)
-        self.assertIn("<i>Forecast:</i> <code>0.3%</code>", msg)
-        self.assertIn("<i>Previous:</i> <code>0.2%</code>", msg)
+        self.assertEqual(
+            msg,
+            "<b>FOREX NEWS — Thu, 27 Aug 2026</b>\n"
+            "High impact · Asia/Kolkata · Morning Brief\n\n"
+            "<b>6:00 PM · USD</b> 🇺🇸\n"
+            "Core CPI &lt;m/m&gt; &amp; Rates\n"
+            "Forecast <code>0.3%</code> · Previous <code>0.2%</code>\n\n"
+            "<i>Expect volatility around release times.</i>",
+        )
+        self.assertNotIn("━", msg)
+        self.assertNotIn("─", msg)
 
 
 class TestComputeSecondsUntilNextRun(unittest.TestCase):
