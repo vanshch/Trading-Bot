@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.config import TelegramConfig
+from src.multimodal_verifier import MultimodalTradeVerification
 from src.notifier import TelegramNotifier
 from src.state_tracker import TradeInfo
 
@@ -62,6 +63,36 @@ class TestTelegramNotifier(unittest.IsolatedAsyncioTestCase):
         self.assertIn("NIFTY 50", msg)
         self.assertIn("Duration:", msg)
         self.assertIn("15m 0s", msg)
+
+    def test_format_fast_audio_trade_message(self) -> None:
+        verification = MultimodalTradeVerification(
+            is_trade_active=True,
+            direction="CALL",
+            instrument="NIFTY 24500 CE",
+            entry_price="120",
+            stop_loss="95",
+            target="160",
+            trigger_quote="Haan entry bana lo yahan pe call mein",
+            confidence=0.95,
+            reasoning="Spoken confirmation + chart breakout",
+        )
+
+        msg = self.notifier.format_fast_audio_trade_message(
+            channel_name="Scalper Pro",
+            verification=verification,
+            stream_url="https://youtube.com/watch?v=sample123",
+            elapsed_seconds=3665,
+        )
+
+        self.assertIn("LIVE TRADE SIGNAL: Scalper Pro", msg)
+        self.assertIn("NIFTY 24500 CE", msg)
+        self.assertIn("CALL (CE)", msg)
+        self.assertIn("120", msg)
+        self.assertIn("SL: 95", msg)
+        self.assertIn("TGT: 160", msg)
+        self.assertIn("Haan entry bana lo yahan pe call mein", msg)
+        self.assertIn("t=1h1m5s", msg)
+        self.assertIn("Conf: 95%", msg)
 
     def test_untrusted_trade_text_is_html_escaped(self) -> None:
         self.sample_trade.instrument = "<script>alert(1)</script>"
@@ -197,7 +228,6 @@ class TestTelegramNotifier(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mock_post.call_count, 1)
 
     def test_format_management_alert_message_partial_exit(self) -> None:
-        from src.multimodal_verifier import MultimodalTradeVerification
         v = MultimodalTradeVerification(
             signal_type="PARTIAL_EXIT",
             direction="BUY",
@@ -221,7 +251,6 @@ class TestTelegramNotifier(unittest.IsolatedAsyncioTestCase):
         self.assertIn("t=1h1m5s", msg)
 
     def test_format_management_alert_message_escapes_html(self) -> None:
-        from src.multimodal_verifier import MultimodalTradeVerification
         v = MultimodalTradeVerification(
             signal_type="MOVE_STOP",
             direction="BUY",
@@ -249,7 +278,6 @@ class TestTelegramNotifier(unittest.IsolatedAsyncioTestCase):
         mock_response.__aenter__.return_value = mock_response
         mock_post.return_value = mock_response
 
-        from src.multimodal_verifier import MultimodalTradeVerification
         v = MultimodalTradeVerification(
             signal_type="MOVE_STOP",
             direction="BUY",
@@ -277,8 +305,6 @@ class TestTelegramNotifier(unittest.IsolatedAsyncioTestCase):
         mock_response.status = 200
         mock_response.__aenter__.return_value = mock_response
         mock_post.return_value = mock_response
-
-        from src.multimodal_verifier import MultimodalTradeVerification
 
         verification = MultimodalTradeVerification(
             signal_type="PARTIAL_EXIT",
@@ -318,4 +344,3 @@ class TestTelegramNotifier(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
