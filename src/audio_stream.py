@@ -356,6 +356,10 @@ class AudioStreamManager:
             "-nostdin",
             "-loglevel",
             "warning",
+            "-fflags",
+            "+genpts+discardcorrupt",
+            "-avoid_negative_ts",
+            "make_zero",
         ]
         if input_from_stdin:
             command.extend(["-i", "pipe:0"])
@@ -382,6 +386,8 @@ class AudioStreamManager:
         command.extend(
             [
                 "-vn",
+                "-af",
+                "aresample=async=1000:min_hard_comp=0.100000:first_pts=0",
                 "-acodec",
                 "pcm_s16le",
                 "-ar",
