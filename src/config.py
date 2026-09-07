@@ -432,6 +432,18 @@ class NewsConfig(BaseModel):
         gt=0.0,
         description="Initial retry delay in seconds for exponential backoff",
     )
+    rate_limit_cooldown_seconds: float = Field(
+        default=900.0,
+        ge=60.0,
+        le=86400.0,
+        description="Cooldown in seconds after encountering HTTP 429 rate limit",
+    )
+    min_retry_interval_seconds: float = Field(
+        default=300.0,
+        ge=10.0,
+        le=3600.0,
+        description="Minimum seconds between failed refresh attempts",
+    )
 
     @field_validator("schedule_times")
     @classmethod

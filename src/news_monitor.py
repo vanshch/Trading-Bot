@@ -75,20 +75,54 @@ class ForexNewsEvent:
 class ForexNewsFetcher:
     """Async HTTP client to fetch and parse Forex Factory weekly calendar events."""
 
+    DEFAULT_HEADERS: dict[str, str] = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/128.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
     def __init__(
         self,
         feed_url: str = "https://nfs.faireconomy.media/ff_calendar_thisweek.json",
         timeout_seconds: float = 15.0,
         max_retries: int = 3,
         retry_delay_seconds: float = 3.0,
+        rate_limit_cooldown_seconds: float = 900.0,
         session: aiohttp.ClientSession | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         self.feed_url = feed_url
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self.retry_delay_seconds = retry_delay_seconds
+        self.rate_limit_cooldown_seconds = rate_limit_cooldown_seconds
+        self.headers = headers or dict(self.DEFAULT_HEADERS)
         self._session = session
         self._owns_session = session is None
+        self._rate_limited_until_utc: datetime | None = None
+        self.last_fetch_succeeded: bool = False
+        self.last_status_code: int | None = None
+
+    def is_rate_limited(self, now_utc: datetime | None = None) -> bool:
+        """Check if currently within an active rate-limit backoff window."""
+        if self._rate_limited_until_utc is None:
+            return False
+        current = now_utc or datetime.now(timezone.utc)
+        if current < self._rate_limited_until_utc:
+            return True
+        self._rate_limited_until_utc = None
+        return False
+
+    def remaining_cooldown_seconds(self, now_utc: datetime | None = None) -> float:
+        """Seconds remaining in current rate-limit cooldown window (0.0 if not rate limited)."""
+        if not self.is_rate_limited(now_utc):
+            return 0.0
+        current = now_utc or datetime.now(timezone.utc)
+        return max(0.0, (self._rate_limited_until_utc - current).total_seconds())
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -122,18 +156,40 @@ class ForexNewsFetcher:
 
     async def fetch_events(self) -> list[ForexNewsEvent]:
         """Fetch raw JSON from Forex Factory and parse into structured ForexNewsEvent objects."""
+        now_utc = datetime.now(timezone.utc)
+        if self.is_rate_limited(now_utc):
+            remaining = int(self.remaining_cooldown_seconds(now_utc))
+            logger.info(
+                f"Forex Factory fetch skipped: rate-limit cooldown active ({remaining}s remaining until {self._rate_limited_until_utc.strftime('%H:%M:%S UTC')})"
+            )
+            self.last_fetch_succeeded = False
+            return []
+
         session = await self._get_session()
         delay = self.retry_delay_seconds
+        self.last_fetch_succeeded = False
+        self.last_status_code = None
+
+        urls = [self.feed_url]
+        if "nfs.faireconomy.media" in self.feed_url:
+            mirror_url = self.feed_url.replace(
+                "nfs.faireconomy.media", "cdn-nfs.faireconomy.media"
+            )
+            if mirror_url != self.feed_url:
+                urls.append(mirror_url)
 
         for attempt in range(1, self.max_retries + 1):
+            url = urls[0] if attempt == 1 or len(urls) == 1 else urls[1]
             try:
-                async with session.get(self.feed_url) as resp:
+                async with session.get(url, headers=self.headers) as resp:
+                    self.last_status_code = resp.status
                     if resp.status == 200:
                         raw_data = await resp.json(content_type=None)
                         if not isinstance(raw_data, list):
                             logger.error(
                                 f"Unexpected Forex Factory JSON format: expected list, got {type(raw_data).__name__}"
                             )
+                            self.last_fetch_succeeded = False
                             return []
 
                         events: list[ForexNewsEvent] = []
@@ -155,18 +211,35 @@ class ForexNewsFetcher:
                             events.append(event)
 
                         logger.info(
-                            f"Successfully fetched {len(events)} calendar events from Forex Factory"
+                            f"Successfully fetched {len(events)} calendar events from Forex Factory ({url})"
                         )
+                        self.last_fetch_succeeded = True
                         return events
 
-                    body = await resp.text()
+                    if resp.status == 429:
+                        retry_after = resp.headers.get("Retry-After")
+                        cooldown = self.rate_limit_cooldown_seconds
+                        if retry_after:
+                            try:
+                                cooldown = max(float(retry_after), 60.0)
+                            except ValueError:
+                                pass
+                        self._rate_limited_until_utc = datetime.now(timezone.utc) + timedelta(seconds=cooldown)
+                        logger.warning(
+                            f"Forex Factory returned HTTP 429 (Rate Limited). "
+                            f"Aborting retries and activating cooldown for {int(cooldown)}s until {self._rate_limited_until_utc.strftime('%H:%M:%S UTC')}."
+                        )
+                        self.last_fetch_succeeded = False
+                        return []
+
+                    # Non-429 error
                     logger.warning(
-                        f"Forex Factory feed returned HTTP {resp.status} (attempt {attempt}/{self.max_retries}): {body[:150]}"
+                        f"Forex Factory feed returned HTTP {resp.status} on {url} (attempt {attempt}/{self.max_retries})"
                     )
 
             except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
                 logger.warning(
-                    f"Forex Factory network error on attempt {attempt}/{self.max_retries}: {type(exc).__name__} ({exc})"
+                    f"Forex Factory network error on attempt {attempt}/{self.max_retries} ({url}): {type(exc).__name__} ({exc})"
                 )
 
             if attempt < self.max_retries:
@@ -176,6 +249,7 @@ class ForexNewsFetcher:
         logger.error(
             f"Failed to fetch Forex Factory calendar events after {self.max_retries} attempts"
         )
+        self.last_fetch_succeeded = False
         return []
 
 
@@ -374,6 +448,10 @@ class ForexNewsService:
             timeout_seconds=config.timeout_seconds,
             max_retries=config.max_retries,
             retry_delay_seconds=config.retry_delay_seconds,
+            rate_limit_cooldown_seconds=getattr(config, "rate_limit_cooldown_seconds", 900.0),
+        )
+        self._min_retry_interval_seconds: float = getattr(
+            config, "min_retry_interval_seconds", 300.0
         )
 
         try:
@@ -387,6 +465,8 @@ class ForexNewsService:
         self._cached_events: list[ForexNewsEvent] = []
         self._cached_date: date | None = None
         self._last_fetch_utc: datetime | None = None
+        self._last_successful_fetch_utc: datetime | None = None
+        self._last_fetch_attempt_utc: datetime | None = None
         self._alerted_event_keys: set[str] = set()
 
     async def close(self) -> None:
@@ -398,27 +478,54 @@ class ForexNewsService:
         """Construct unique string identifier for deduplication."""
         return f"{event.country}:{event.title}:{event.date_utc.isoformat()}"
 
-    async def refresh_today_events(self) -> list[ForexNewsEvent]:
+    async def refresh_today_events(self, force: bool = False) -> list[ForexNewsEvent]:
         """Fetch and refresh in-memory cache of today's high-impact news events."""
         now_utc = datetime.now(timezone.utc)
         today_local = now_utc.astimezone(self.tz).date()
+
+        # Check if fetcher is currently rate limited
+        is_rl_fn = getattr(self.fetcher, "is_rate_limited", None)
+        if callable(is_rl_fn) and is_rl_fn(now_utc) is True:
+            logger.info("Forex Factory refresh skipped: fetcher in rate-limit cooldown.")
+            return self._cached_events
+
+        # Enforce min retry interval if prior fetch failed and not forced
+        if not force and self._last_fetch_attempt_utc is not None and self._last_successful_fetch_utc is None:
+            elapsed = (now_utc - self._last_fetch_attempt_utc).total_seconds()
+            if elapsed < self._min_retry_interval_seconds:
+                logger.debug(
+                    f"Forex Factory refresh throttled: {elapsed:.1f}s since last attempt (min: {self._min_retry_interval_seconds}s)"
+                )
+                return self._cached_events
+
+        self._last_fetch_attempt_utc = now_utc
 
         # If calendar day changed, prune past alerted keys
         if self._cached_date is not None and self._cached_date != today_local:
             self._alerted_event_keys.clear()
 
         events = await self.fetcher.fetch_events()
-        filtered = filter_events_for_day(
-            events=events,
-            target_date=today_local,
-            target_tz=self.tz,
-            impact_levels=self.config.impact_levels,
-            currencies=self.config.currencies,
-        )
-        self._cached_events = filtered
-        self._cached_date = today_local
-        self._last_fetch_utc = now_utc
-        return filtered
+
+        fetch_succeeded = getattr(self.fetcher, "last_fetch_succeeded", True) is not False
+        if fetch_succeeded:
+            filtered = filter_events_for_day(
+                events=events,
+                target_date=today_local,
+                target_tz=self.tz,
+                impact_levels=self.config.impact_levels,
+                currencies=self.config.currencies,
+            )
+            self._cached_events = filtered
+            self._cached_date = today_local
+            self._last_fetch_utc = now_utc
+            self._last_successful_fetch_utc = now_utc
+            return filtered
+        else:
+            self._last_fetch_utc = now_utc
+            logger.warning(
+                "Forex Factory calendar refresh failed; retaining previous cache."
+            )
+            return self._cached_events
 
     async def check_and_dispatch_pre_event_alerts(
         self, now_utc: datetime | None = None
@@ -483,7 +590,7 @@ class ForexNewsService:
         logger.info(
             f"Fetching Forex Factory news for {today_local} ({self.tz})..."
         )
-        filtered = await self.refresh_today_events()
+        filtered = await self.refresh_today_events(force=True)
 
         message = format_daily_news_message(
             events=filtered,
@@ -516,7 +623,7 @@ class ForexNewsService:
 
         # Initial fetch of today's events upon startup
         try:
-            await self.refresh_today_events()
+            await self.refresh_today_events(force=True)
             logger.info(
                 f"Forex Factory news cache initialized with {len(self._cached_events)} high-impact event(s) for today"
             )
@@ -547,13 +654,27 @@ class ForexNewsService:
                 except Exception:
                     logger.exception("Unexpected error during scheduled Forex Factory news dispatch")
 
-            # Periodic cache refresh if empty, older than 1 hour, or date rolled over
-            if (
-                not self._cached_events
-                or self._last_fetch_utc is None
-                or (now_utc - self._last_fetch_utc) > timedelta(hours=1)
-                or (self._cached_date != local_now.date())
-            ):
+            # Periodic cache refresh if:
+            # 1. Never successfully fetched and min retry interval has elapsed
+            # 2. OR local date rolled over to new day
+            # 3. OR last successful fetch is older than 1 hour
+            time_since_attempt = (
+                (now_utc - self._last_fetch_attempt_utc).total_seconds()
+                if self._last_fetch_attempt_utc
+                else float("inf")
+            )
+
+            needs_refresh = False
+            if self._last_successful_fetch_utc is None:
+                if time_since_attempt >= self._min_retry_interval_seconds:
+                    needs_refresh = True
+            elif self._cached_date != local_now.date():
+                needs_refresh = True
+            elif (now_utc - self._last_successful_fetch_utc) > timedelta(hours=1):
+                if time_since_attempt >= self._min_retry_interval_seconds:
+                    needs_refresh = True
+
+            if needs_refresh:
                 try:
                     await self.refresh_today_events()
                 except Exception:

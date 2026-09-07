@@ -448,3 +448,168 @@ class TestForexNewsService(unittest.IsolatedAsyncioTestCase):
 
         # Date rolled over to today -> past alerted keys cleared
         self.assertEqual(len(self.service._alerted_event_keys), 0)
+
+class TestForexNewsFetcherRateLimiting(unittest.IsolatedAsyncioTestCase):
+    """Tests for ForexNewsFetcher HTTP 429 backoff, cooldown, and mirror fallback."""
+
+    def setUp(self) -> None:
+        self.fetcher = ForexNewsFetcher(
+            feed_url="https://nfs.faireconomy.media/ff_calendar_thisweek.json",
+            timeout_seconds=2.0,
+            max_retries=3,
+            retry_delay_seconds=0.01,
+            rate_limit_cooldown_seconds=600.0,
+        )
+
+    async def asyncTearDown(self) -> None:
+        await self.fetcher.close()
+
+    @patch("aiohttp.ClientSession.get")
+    async def test_http_429_activates_cooldown_and_aborts_retries(
+        self, mock_get: MagicMock
+    ) -> None:
+        mock_resp = AsyncMock()
+        mock_resp.status = 429
+        mock_resp.headers = {"Retry-After": "120"}
+        mock_resp.__aenter__.return_value = mock_resp
+        mock_get.return_value = mock_resp
+
+        # 1. Fetch triggers 429
+        events = await self.fetcher.fetch_events()
+        self.assertEqual(events, [])
+        self.assertFalse(self.fetcher.last_fetch_succeeded)
+        # Should abort immediately after 1 attempt, NOT burn all 3 retries
+        self.assertEqual(mock_get.call_count, 1)
+        self.assertTrue(self.fetcher.is_rate_limited())
+        # Retry-After of 120s was respected
+        self.assertGreaterEqual(self.fetcher.remaining_cooldown_seconds(), 115.0)
+
+        # 2. Subsequent call while rate-limited does NOT make any network request
+        events2 = await self.fetcher.fetch_events()
+        self.assertEqual(events2, [])
+        self.assertEqual(mock_get.call_count, 1)
+
+    @patch("aiohttp.ClientSession.get")
+    async def test_http_429_default_cooldown_when_no_retry_after(
+        self, mock_get: MagicMock
+    ) -> None:
+        mock_resp = AsyncMock()
+        mock_resp.status = 429
+        mock_resp.headers = {}
+        mock_resp.__aenter__.return_value = mock_resp
+        mock_get.return_value = mock_resp
+
+        events = await self.fetcher.fetch_events()
+        self.assertEqual(events, [])
+        self.assertTrue(self.fetcher.is_rate_limited())
+        # Default rate_limit_cooldown_seconds is 600.0
+        self.assertGreaterEqual(self.fetcher.remaining_cooldown_seconds(), 590.0)
+
+    @patch("aiohttp.ClientSession.get")
+    async def test_server_error_falls_back_to_mirror_url(
+        self, mock_get: MagicMock
+    ) -> None:
+        # First call to primary URL fails with 500, second call to mirror succeeds with 200
+        mock_resp_fail = AsyncMock()
+        mock_resp_fail.status = 500
+        mock_resp_fail.text.return_value = "Server Error"
+
+        mock_resp_ok = AsyncMock()
+        mock_resp_ok.status = 200
+        mock_resp_ok.json.return_value = []
+
+        mock_resp_fail.__aenter__.return_value = mock_resp_fail
+        mock_resp_ok.__aenter__.return_value = mock_resp_ok
+        mock_get.side_effect = [mock_resp_fail, mock_resp_ok]
+
+        events = await self.fetcher.fetch_events()
+        self.assertEqual(events, [])
+        self.assertTrue(self.fetcher.last_fetch_succeeded)
+        self.assertEqual(mock_get.call_count, 2)
+        # Verify second call used mirror URL cdn-nfs
+        first_call_url = mock_get.call_args_list[0][0][0]
+        second_call_url = mock_get.call_args_list[1][0][0]
+        self.assertIn("nfs.faireconomy.media", first_call_url)
+        self.assertIn("cdn-nfs.faireconomy.media", second_call_url)
+
+
+class TestForexNewsServiceEmptyCacheAndThrottling(unittest.IsolatedAsyncioTestCase):
+    """Tests that empty event lists are cached as valid results and not re-fetched every loop."""
+
+    def setUp(self) -> None:
+        self.config = NewsConfig(
+            enabled=True,
+            schedule_times=["08:00", "14:00"],
+            timezone="Asia/Kolkata",
+            impact_levels=["High"],
+            pre_event_alert_enabled=True,
+            pre_event_minutes=30,
+            poll_interval_seconds=10.0,
+            min_retry_interval_seconds=60.0,
+        )
+        self.mock_notifier = MagicMock()
+        self.mock_notifier.send_news_alert = AsyncMock(return_value=True)
+
+        self.mock_fetcher = MagicMock()
+        self.mock_fetcher.fetch_events = AsyncMock(return_value=[])
+        self.mock_fetcher.close = AsyncMock()
+        self.mock_fetcher.is_rate_limited.return_value = False
+        self.mock_fetcher.last_fetch_succeeded = True
+
+        self.service = ForexNewsService(
+            config=self.config,
+            notifier=self.mock_notifier,
+            fetcher=self.mock_fetcher,
+        )
+
+    async def asyncTearDown(self) -> None:
+        await self.service.close()
+
+    async def test_successful_empty_calendar_records_success_timestamp(self) -> None:
+        self.mock_fetcher.fetch_events.return_value = []
+        self.mock_fetcher.last_fetch_succeeded = True
+
+        events = await self.service.refresh_today_events()
+        self.assertEqual(events, [])
+        self.assertIsNotNone(self.service._last_successful_fetch_utc)
+        self.assertEqual(self.service._cached_events, [])
+
+    async def test_failed_fetch_is_throttled_by_min_retry_interval(self) -> None:
+        self.mock_fetcher.fetch_events.return_value = []
+        self.mock_fetcher.last_fetch_succeeded = False
+
+        # First call fails
+        await self.service.refresh_today_events()
+        self.assertIsNone(self.service._last_successful_fetch_utc)
+        self.assertEqual(self.mock_fetcher.fetch_events.call_count, 1)
+
+        # Immediate second call without force should be throttled
+        await self.service.refresh_today_events(force=False)
+        # Should NOT have called fetch_events again
+        self.assertEqual(self.mock_fetcher.fetch_events.call_count, 1)
+
+    async def test_run_loop_does_not_refetch_when_cached_events_empty(self) -> None:
+        # Simulate successful startup with empty calendar (e.g. Sunday or no High-impact news)
+        self.mock_fetcher.fetch_events.return_value = []
+        self.mock_fetcher.last_fetch_succeeded = True
+
+        stop_event = asyncio.Event()
+
+        # Stop after 2 loop cycles
+        loop_counter = 0
+        original_sleep = asyncio.wait_for
+
+        async def mocked_wait_for(coro, timeout):
+            nonlocal loop_counter
+            if asyncio.iscoroutine(coro):
+                coro.close()
+            loop_counter += 1
+            if loop_counter >= 3:
+                stop_event.set()
+            raise asyncio.TimeoutError()
+
+        with patch("asyncio.wait_for", side_effect=mocked_wait_for):
+            await self.service.run(stop_event)
+
+        # Initial startup fetch occurred once, but the 3 loop iterations did NOT re-fetch!
+        self.assertEqual(self.mock_fetcher.fetch_events.call_count, 1)

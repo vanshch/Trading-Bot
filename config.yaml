@@ -196,7 +196,7 @@ telegram:
   retry_delay_seconds: 2.0
   timeout_seconds: 10.0
 news:
-  enabled: false
+  enabled: true
   feed_url: https://nfs.faireconomy.media/ff_calendar_thisweek.json
   schedule_times:
   - "08:00"
@@ -210,3 +210,5 @@ news:
   timeout_seconds: 15.0
   max_retries: 3
   retry_delay_seconds: 3.0
+  rate_limit_cooldown_seconds: 900.0
+  min_retry_interval_seconds: 300.0
