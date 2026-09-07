@@ -25,9 +25,11 @@ def test_session_lifecycle(temp_storage: Path) -> None:
     session = logger.start_session(
         channel_name="Mehak Trades",
         channel_url="https://www.youtube.com/@tradewithmehaktrades/live",
+        broadcast_id="broadcast-123",
     )
     assert session.session_id is not None
     assert session.channel_name == "Mehak Trades"
+    assert session.broadcast_id == "broadcast-123"
     assert session.status == "ACTIVE"
     assert logger.get_total_sessions_count() == 1
 
@@ -40,7 +42,11 @@ def test_session_lifecycle(temp_storage: Path) -> None:
     logger.record_management(session.session_id, alerted=False)
 
     # 4. End session
-    ended = logger.end_session(session.session_id, status="COMPLETED")
+    ended = logger.end_session(
+        session.session_id,
+        status="COMPLETED",
+        internal_transport_restarts=2,
+    )
     assert ended is not None
     assert ended.status == "COMPLETED"
     assert ended.chunks_processed == 5
@@ -50,6 +56,7 @@ def test_session_lifecycle(temp_storage: Path) -> None:
     assert ended.management_detected == 2
     assert ended.management_alerted == 1
     assert ended.ended_at is not None
+    assert ended.internal_transport_restarts == 2
 
     # 5. Check persistent disk format
     assert temp_storage.exists()
@@ -60,6 +67,8 @@ def test_session_lifecycle(temp_storage: Path) -> None:
     assert data["sessions"][0]["trades_detected"] == 1
     assert data["sessions"][0]["management_detected"] == 2
     assert data["sessions"][0]["management_alerted"] == 1
+    assert data["sessions"][0]["broadcast_id"] == "broadcast-123"
+    assert data["sessions"][0]["internal_transport_restarts"] == 2
 
 
 def test_multiple_sessions_summary(temp_storage: Path) -> None:
@@ -296,3 +305,39 @@ def test_duration_weighted_aggregate_coverage(temp_storage: Path) -> None:
     assert summary["coverage_percent"] == 95.0
     assert summary["duration_weighted_coverage_percent"] == 95.0
     assert summary["coverage_percent"] <= 100.0
+
+
+def test_broadcast_summary_includes_gaps_between_fragments(temp_storage: Path) -> None:
+    logger = LiveSessionLogger(storage_path=temp_storage)
+    logger._save_records(
+        [
+            {
+                "session_id": "frag1",
+                "broadcast_id": "video123",
+                "channel_name": "Trader",
+                "started_at": "2026-09-02T09:00:00+00:00",
+                "ended_at": "2026-09-02T09:01:40+00:00",
+                "duration_seconds": 100.0,
+                "audio_seconds_captured": 90.0,
+                "internal_transport_restarts": 1,
+            },
+            {
+                "session_id": "frag2",
+                "broadcast_id": "video123",
+                "channel_name": "Trader",
+                "started_at": "2026-09-02T09:02:00+00:00",
+                "ended_at": "2026-09-02T09:03:00+00:00",
+                "duration_seconds": 60.0,
+                "audio_seconds_captured": 60.0,
+                "internal_transport_restarts": 2,
+            },
+        ]
+    )
+
+    summary = logger.get_broadcast_summary("video123")
+    assert summary is not None
+    assert summary["fragment_count"] == 2
+    assert summary["wall_duration_seconds"] == 180.0
+    assert summary["audio_seconds_captured"] == 150.0
+    assert summary["coverage_percent"] == 83.33
+    assert summary["internal_transport_restarts"] == 3

@@ -84,8 +84,43 @@ class CaptureConfig(BaseModel):
     stream_timeout_seconds: float = Field(
         default=15.0, gt=0.0, description="Network timeout for stream resolution"
     )
+    youtube_proxy_url: str | None = Field(
+        default=None,
+        description=(
+            "Optional HTTP/SOCKS proxy used only for YouTube resolution and capture"
+        ),
+    )
     max_consecutive_stream_errors: int = Field(
         default=5, ge=1, description="Threshold before resetting stream capture"
+    )
+    audio_max_consecutive_timeouts: int = Field(
+        default=2,
+        ge=1,
+        description=(
+            "Consecutive decoded-audio read timeouts before refreshing the active transport"
+        ),
+    )
+    youtube_max_internal_restarts: int = Field(
+        default=3,
+        ge=0,
+        description=(
+            "Bounded consecutive Streamlink refreshes before returning to live-status resolution"
+        ),
+    )
+    youtube_startup_timeout_seconds: float = Field(
+        default=30.0,
+        gt=0.0,
+        description="Initial/restarted YouTube worker grace period before refresh",
+    )
+    youtube_stall_timeout_seconds: float = Field(
+        default=15.0,
+        gt=0.0,
+        description="Maximum wait for a complete PCM chunk from a healthy YouTube worker",
+    )
+    youtube_internal_restart_delay_seconds: float = Field(
+        default=1.0,
+        ge=0.0,
+        description="Short anti-storm delay before an internal YouTube worker refresh",
     )
     restart_initial_delay_seconds: float = Field(
         default=1.0,
@@ -114,10 +149,27 @@ class CaptureConfig(BaseModel):
         description="Bounded random jitter ratio for restart delays (0.0 in unit tests)",
     )
     provider_rate_limit_cooldown_seconds: float = Field(
-        default=120.0,
-        gt=0.0,
-        description="Circuit-breaker cooldown in seconds after provider HTTP 429 rate limit",
+        default=0.0,
+        ge=0.0,
+        description="Circuit-breaker cooldown in seconds after provider HTTP 429 rate limit (0.0 disables cooldown)",
     )
+
+    @field_validator("youtube_proxy_url")
+    @classmethod
+    def validate_youtube_proxy_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        value = v.strip()
+        if not value:
+            return None
+        parsed = urlparse(value)
+        if parsed.scheme.lower() not in {"http", "https", "socks4", "socks5", "socks5h"}:
+            raise ValueError("YouTube proxy must use HTTP, HTTPS, SOCKS4, or SOCKS5")
+        if not parsed.hostname:
+            raise ValueError("YouTube proxy URL must include a hostname")
+        if parsed.username or parsed.password:
+            raise ValueError("YouTube proxy credentials must not be embedded in config")
+        return value
 
     @model_validator(mode="after")
     def check_restart_delay_bounds(self) -> "CaptureConfig":

@@ -185,6 +185,10 @@ ai:
 telegram:
   include_screenshot: true
   caption_timezone: "Asia/Kolkata"
+
+news:
+  enabled: false  # Temporarily disabled in production pending calendar backoff & empty-cache fix
+  feed_url: "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
 ```
 
 ### 5. Run the Monitoring Bot
@@ -383,6 +387,35 @@ pytest -v
 
 ---
 
+## Current Operational Status and Priorities
+
+The production worker runs as the `trade-bot` systemd service on the Google Compute Engine VM `trade-bot-vm` (`us-central1-a`). It is a continuous worker, not an HTTP service.
+
+### Active Operational Mitigation (Forex Factory)
+
+As of September 7, 2026, **`news.enabled` has been set to `false`** in production (`trade-bot-vm`) and in `config.yaml` as an immediate stop-gap.
+- **Root Cause**: The Forex Factory calendar refresh logic previously evaluated `not self._cached_events` as an indicator of cache staleness. On days with no high-impact events (e.g. holidays, weekends, or following an upstream transient failure), this triggered HTTP requests every `news.poll_interval_seconds` (30 seconds). Cloudflare responded with HTTP 429 ("Too Many Requests"), which caused 3 rapid retries every 30 seconds and flooded systemd journal logs.
+- **Current State**: YouTube live stream monitoring (audio transcription, keyword detection, multimodal verification) remains fully operational. Forex Factory polling is completely stopped until the permanent caching and circuit-breaker fix is implemented.
+
+### Highest-priority reliability fix
+
+The Forex Factory calendar fetcher must distinguish an **empty, successful** event list from a failed refresh. The current refresh condition treats an empty cache as stale, so on days with no matching high-impact events it refetches every `news.poll_interval_seconds` (currently 30 seconds). When the upstream feed responds with HTTP 429, the three-attempt retry policy multiplies traffic and log noise.
+
+Target behaviour:
+
+- Keep the last successful fetch timestamp even when the filtered list is empty.
+- Refresh on the normal hourly cadence, day rollover, or an explicit scheduled dispatch—not because the event list is empty.
+- Respect `Retry-After` when supplied; otherwise apply a capped cooldown after 429 responses.
+- Log a concise rate-limit summary rather than an HTML response body.
+
+Before changing this behaviour, add coverage for successful empty results, 429 cooldown/backoff, and scheduled briefing with an empty event list.
+
+### Documentation contract
+
+`AGENTS.md` is the repository instruction source for automated coding harnesses. Any code change that alters architecture, configuration, commands, deployment, externally visible behaviour, operational constraints, or test workflow must update this README in the same change. README is the current-source-of-truth overview; implementation plans and `scratch/` are historical or experimental material.
+
+---
+
 ## Container & Google Cloud Deployment
 
 ### Docker Local Build & Run
@@ -398,9 +431,9 @@ docker run -d \
   trade-monitoring-bot:latest
 ```
 
-### Google Cloud Deployment (Cloud Run Worker Pool / GCE)
+### Google Cloud Deployment (GCE / Cloud Run Worker Pool)
 
-#### Option A: Cloud Run Worker Pool (Recommended)
+#### Option A: Cloud Run Worker Pool (Alternative deployment)
 
 This bot does continuous non-HTTP work. Deploy it as a Worker Pool, not as a Cloud Run service. Worker pools do not require a listening port and do not autoscale; keep one instance running for this bot. See the [Cloud Run worker-pool documentation](https://cloud.google.com/run/docs/deploy-worker-pools).
 
@@ -435,7 +468,7 @@ This bot does continuous non-HTTP work. Deploy it as a Worker Pool, not as a Clo
 
    Pin numbered secret versions instead of `latest` once the initial deployment is stable. Worker pools are billed while instances run.
 
-#### Option B: Compute Engine
+#### Option B: Compute Engine (current production deployment)
 
 If Worker Pools are unavailable in your region, use a Container-Optimized OS VM with a startup script or `cloud-init` that starts the Docker container. Do not use `gcloud compute instances create-with-container`; Google shut down its container startup agent on July 31, 2026. Follow the current [Compute Engine container migration guidance](https://cloud.google.com/compute/docs/containers/prepare-for-container-agent-shutdown).
 

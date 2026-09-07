@@ -127,20 +127,72 @@ class TestConfigValidation(unittest.TestCase):
             )
 
     def test_capture_provider_rate_limit_cooldown_setting(self) -> None:
-        # Default is 120.0 seconds
+        # Default is 0.0 seconds (cooldown disabled)
         default_cfg = CaptureConfig()
-        self.assertEqual(default_cfg.provider_rate_limit_cooldown_seconds, 120.0)
+        self.assertEqual(default_cfg.provider_rate_limit_cooldown_seconds, 0.0)
 
         # Valid positive custom cooldown
         custom_cfg = CaptureConfig(provider_rate_limit_cooldown_seconds=45.0)
         self.assertEqual(custom_cfg.provider_rate_limit_cooldown_seconds, 45.0)
 
-        # Reject zero or negative cooldown
-        with self.assertRaises(ValidationError):
-            CaptureConfig(provider_rate_limit_cooldown_seconds=0.0)
+        # Allow zero cooldown
+        zero_cfg = CaptureConfig(provider_rate_limit_cooldown_seconds=0.0)
+        self.assertEqual(zero_cfg.provider_rate_limit_cooldown_seconds, 0.0)
 
+        # Reject negative cooldown
         with self.assertRaises(ValidationError):
             CaptureConfig(provider_rate_limit_cooldown_seconds=-10.0)
+
+    def test_capture_youtube_proxy_url_validation(self) -> None:
+        self.assertIsNone(CaptureConfig().youtube_proxy_url)
+        self.assertEqual(
+            CaptureConfig(
+                youtube_proxy_url=" socks5://127.0.0.1:40000 "
+            ).youtube_proxy_url,
+            "socks5://127.0.0.1:40000",
+        )
+        self.assertIsNone(CaptureConfig(youtube_proxy_url="  ").youtube_proxy_url)
+
+        for invalid_url in (
+            "ftp://127.0.0.1:40000",
+            "socks5://",
+            "socks5://user:password@127.0.0.1:40000",
+        ):
+            with self.subTest(invalid_url=invalid_url):
+                with self.assertRaises(ValidationError):
+                    CaptureConfig(youtube_proxy_url=invalid_url)
+
+    def test_capture_internal_youtube_restart_settings(self) -> None:
+        default_cfg = CaptureConfig()
+        self.assertEqual(default_cfg.audio_max_consecutive_timeouts, 2)
+        self.assertEqual(default_cfg.youtube_max_internal_restarts, 3)
+        self.assertEqual(default_cfg.youtube_startup_timeout_seconds, 30.0)
+        self.assertEqual(default_cfg.youtube_stall_timeout_seconds, 15.0)
+        self.assertEqual(default_cfg.youtube_internal_restart_delay_seconds, 1.0)
+
+        custom_cfg = CaptureConfig(
+            audio_max_consecutive_timeouts=4,
+            youtube_max_internal_restarts=0,
+            youtube_startup_timeout_seconds=40.0,
+            youtube_stall_timeout_seconds=20.0,
+            youtube_internal_restart_delay_seconds=0.0,
+        )
+        self.assertEqual(custom_cfg.audio_max_consecutive_timeouts, 4)
+        self.assertEqual(custom_cfg.youtube_max_internal_restarts, 0)
+        self.assertEqual(custom_cfg.youtube_startup_timeout_seconds, 40.0)
+        self.assertEqual(custom_cfg.youtube_stall_timeout_seconds, 20.0)
+        self.assertEqual(custom_cfg.youtube_internal_restart_delay_seconds, 0.0)
+
+        with self.assertRaises(ValueError):
+            CaptureConfig(audio_max_consecutive_timeouts=0)
+        with self.assertRaises(ValueError):
+            CaptureConfig(youtube_max_internal_restarts=-1)
+        with self.assertRaises(ValueError):
+            CaptureConfig(youtube_startup_timeout_seconds=0)
+        with self.assertRaises(ValueError):
+            CaptureConfig(youtube_stall_timeout_seconds=0)
+        with self.assertRaises(ValueError):
+            CaptureConfig(youtube_internal_restart_delay_seconds=-1)
 
     def test_valid_roi_crop(self) -> None:
         roi = ROICropConfig(top=0.1, bottom=0.9, left=0.2, right=0.8)

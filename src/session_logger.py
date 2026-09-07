@@ -37,6 +37,7 @@ class LiveSessionRecord:
     """Represents a recorded monitoring session for a live stream broadcast."""
 
     session_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    broadcast_id: str | None = None
     channel_name: str = ""
     channel_url: str = ""
     started_at: str = field(
@@ -54,6 +55,7 @@ class LiveSessionRecord:
     error_message: str | None = None
     audio_seconds_captured: float = 0.0
     coverage_percent: float = 0.0
+    internal_transport_restarts: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -61,6 +63,18 @@ class LiveSessionRecord:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> LiveSessionRecord:
         kwargs = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
+        raw_broadcast_id = kwargs.get("broadcast_id")
+        kwargs["broadcast_id"] = (
+            raw_broadcast_id.strip()
+            if isinstance(raw_broadcast_id, str) and raw_broadcast_id.strip()
+            else None
+        )
+        try:
+            kwargs["internal_transport_restarts"] = max(
+                0, int(kwargs.get("internal_transport_restarts", 0))
+            )
+        except (TypeError, ValueError, OverflowError):
+            kwargs["internal_transport_restarts"] = 0
         kwargs["duration_seconds"] = _nonnegative_finite_float(
             kwargs.get("duration_seconds")
         )
@@ -130,9 +144,16 @@ class LiveSessionLogger:
         except (OSError, TypeError, ValueError) as exc:
             logger.error(f"Failed to persist sessions to {self.storage_path}: {exc}")
 
-    def start_session(self, channel_name: str, channel_url: str) -> LiveSessionRecord:
+    def start_session(
+        self,
+        channel_name: str,
+        channel_url: str,
+        *,
+        broadcast_id: str | None = None,
+    ) -> LiveSessionRecord:
         """Initialize and record a newly captured live broadcast."""
         record = LiveSessionRecord(
+            broadcast_id=broadcast_id.strip() if broadcast_id else None,
             channel_name=channel_name,
             channel_url=channel_url,
             started_at=datetime.now(timezone.utc).isoformat(),
@@ -198,6 +219,7 @@ class LiveSessionLogger:
         *,
         audio_seconds_captured: float | None = None,
         duration_seconds: float | None = None,
+        internal_transport_restarts: int | None = None,
     ) -> LiveSessionRecord | None:
         """Conclude an active live stream monitoring session and update storage."""
         with self._lock:
@@ -232,6 +254,11 @@ class LiveSessionLogger:
             if audio_seconds_captured is not None:
                 session.audio_seconds_captured = _nonnegative_finite_float(
                     audio_seconds_captured
+                )
+
+            if internal_transport_restarts is not None:
+                session.internal_transport_restarts = max(
+                    0, int(internal_transport_restarts)
                 )
 
             if session.duration_seconds > 0.0:
@@ -274,6 +301,49 @@ class LiveSessionLogger:
             raw = self._load_records()
             return [LiveSessionRecord.from_dict(r) for r in raw]
 
+    def get_broadcast_summary(self, broadcast_id: str) -> dict[str, Any] | None:
+        """Aggregate fragments for one YouTube broadcast over their full wall-clock span."""
+        normalized_id = broadcast_id.strip()
+        if not normalized_id:
+            return None
+        sessions = [
+            session
+            for session in self.list_sessions()
+            if session.broadcast_id == normalized_id
+        ]
+        if not sessions:
+            return None
+
+        starts: list[datetime] = []
+        ends: list[datetime] = []
+        for session in sessions:
+            try:
+                starts.append(datetime.fromisoformat(session.started_at))
+                if session.ended_at:
+                    ends.append(datetime.fromisoformat(session.ended_at))
+            except (TypeError, ValueError):
+                continue
+
+        wall_seconds = 0.0
+        if starts and ends:
+            wall_seconds = max(0.0, (max(ends) - min(starts)).total_seconds())
+        audio_seconds = sum(session.audio_seconds_captured for session in sessions)
+        coverage = (
+            max(0.0, min(100.0, round(audio_seconds / wall_seconds * 100.0, 2)))
+            if wall_seconds > 0.0
+            else 0.0
+        )
+        return {
+            "broadcast_id": normalized_id,
+            "fragment_count": len(sessions),
+            "wall_duration_seconds": wall_seconds,
+            "audio_seconds_captured": round(audio_seconds, 3),
+            "coverage_percent": coverage,
+            "internal_transport_restarts": sum(
+                session.internal_transport_restarts for session in sessions
+            ),
+        }
+
     def get_summary(self) -> dict[str, Any]:
         """Calculate aggregated metrics across all recorded live sessions."""
         sessions = self.list_sessions()
@@ -286,6 +356,7 @@ class LiveSessionLogger:
         total_alerts = sum(s.trades_alerted for s in sessions)
         total_mgmt_detected = sum(s.management_detected for s in sessions)
         total_mgmt_alerted = sum(s.management_alerted for s in sessions)
+        total_internal_restarts = sum(s.internal_transport_restarts for s in sessions)
 
         if total_duration_sec > 0:
             captured_for_coverage = sum(
@@ -325,6 +396,7 @@ class LiveSessionLogger:
             "total_telegram_alerts_sent": total_alerts,
             "total_management_detected": total_mgmt_detected,
             "total_management_alerted": total_mgmt_alerted,
+            "total_internal_transport_restarts": total_internal_restarts,
             "channels_breakdown": channel_counts,
         }
 

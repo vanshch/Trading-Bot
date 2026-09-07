@@ -210,7 +210,10 @@ class StreamManager:
         ydl_opts = {
             "quiet": True,
             "no_warnings": True,
-            "js_runtimes": {"node": {}},
+            # Deno is yt-dlp's recommended runtime and is enabled explicitly so
+            # YouTube's current JavaScript challenges do not fall back to the
+            # obsolete system Node.js found on older Linux images.
+            "js_runtimes": {"deno": {}},
             "format": (
                 "bestaudio[protocol^=m3u8]/bestaudio/best[protocol^=m3u8]/"
                 "best[acodec!=none]/best"
@@ -219,6 +222,8 @@ class StreamManager:
             "socket_timeout": self.config.stream_timeout_seconds,
             "logger": _YtDlpLogger(),
         }
+        if self.config.youtube_proxy_url:
+            ydl_opts["proxy"] = self.config.youtube_proxy_url
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:

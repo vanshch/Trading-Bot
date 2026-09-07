@@ -29,6 +29,9 @@ class TestAudioStreamManager(unittest.IsolatedAsyncioTestCase):
         self.assertIn("-reconnect_streamed", command)
         self.assertIn("-reconnect_delay_max", command)
         self.assertIn("-rw_timeout", command)
+        self.assertIn("+genpts+discardcorrupt+igndts", command)
+        self.assertIn("-err_detect", command)
+        self.assertIn("ignore_err", command)
         self.assertEqual(command[-1], "pipe:1")
 
     def test_streamlink_command_enables_hls_recovery_and_buffering(self) -> None:
@@ -42,16 +45,16 @@ class TestAudioStreamManager(unittest.IsolatedAsyncioTestCase):
             "--retry-streams": "15",
             "--retry-max": "3",
             "--retry-open": "3",
-            "--ringbuffer-size": "64M",
-            "--stream-segment-attempts": "5",
-            "--stream-segment-threads": "1",
-            "--stream-segment-timeout": "20",
-            "--hls-live-edge": "3",
-            "--hls-playlist-reload-attempts": "10",
-            "--hls-playlist-reload-time": "segment",
+            "--ringbuffer-size": "128M",
+            "--stream-segment-attempts": "3",
+            "--stream-segment-threads": "4",
+            "--stream-segment-timeout": "8",
+            "--hls-live-edge": "6",
+            "--hls-playlist-reload-attempts": "30",
+            "--hls-playlist-reload-time": "default",
             "--stream-segmented-queue-deadline": "0",
-            "--stream-timeout": "120",
-            "--http-timeout": "30.0",
+            "--stream-timeout": "180",
+            "--http-timeout": "20.0",
             "--loglevel": "warning",
         }
         for flag, expected_val in expected_flags.items():
@@ -64,7 +67,7 @@ class TestAudioStreamManager(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertIn("hls://https://media.example/live.m3u8", command)
-        self.assertEqual(command[-1], "audio_only,worst")
+        self.assertEqual(command[-1], "360p,240p,worst")
         self.assertNotIn("best", command)
 
     def test_streamlink_command_passes_youtube_url_directly(self) -> None:
@@ -74,8 +77,24 @@ class TestAudioStreamManager(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(command[:3], [sys.executable, "-m", "streamlink"])
         self.assertIn("https://www.youtube.com/watch?v=sample123", command)
         self.assertNotIn("hls://https://www.youtube.com/watch?v=sample123", command)
-        self.assertEqual(command[-1], "audio_only,worst")
+        self.assertEqual(command[-1], "360p,240p,worst")
         self.assertNotIn("best", command)
+
+    def test_streamlink_command_uses_proxy_only_for_youtube(self) -> None:
+        proxy_url = "socks5://127.0.0.1:40000"
+        youtube_manager = AudioStreamManager(
+            "https://www.youtube.com/watch?v=sample123",
+            youtube_proxy_url=proxy_url,
+        )
+        youtube_command = youtube_manager._build_streamlink_command()
+        proxy_index = youtube_command.index("--http-proxy")
+        self.assertEqual(youtube_command[proxy_index + 1], proxy_url)
+
+        hls_manager = AudioStreamManager(
+            "https://media.example/live.m3u8",
+            youtube_proxy_url=proxy_url,
+        )
+        self.assertNotIn("--http-proxy", hls_manager._build_streamlink_command())
 
     def test_streamlink_command_url_handling_matrix(self) -> None:
         """Verify URL prefixing behavior across YouTube, youtu.be, Twitch, and raw HLS URLs."""
@@ -103,7 +122,7 @@ class TestAudioStreamManager(unittest.IsolatedAsyncioTestCase):
             mgr = AudioStreamManager(input_url)
             cmd = mgr._build_streamlink_command()
             self.assertIn(expected_target, cmd)
-            self.assertEqual(cmd[-1], "audio_only,worst")
+            self.assertEqual(cmd[-1], "360p,240p,worst")
             self.assertNotIn("best", cmd)
             if was_prefixed:
                 self.assertNotIn(f"hls://{expected_target}", cmd)
@@ -1246,7 +1265,7 @@ class TestStreamlinkYouTubeOwnership(unittest.IsolatedAsyncioTestCase):
                 )
 
     def test_youtube_ownership_command_options_and_no_ffmpeg_throttling(self) -> None:
-        """Streamlink receives canonical public YouTube URL at 3-segment live edge; FFmpeg stdin has no -re."""
+        """Streamlink receives a canonical YouTube URL with the proven ULL buffer; FFmpeg has no -re."""
         watch_url = "https://www.youtube.com/watch?v=Nq2wYlWFucg"
         manager = AudioStreamManager(watch_url)
 
@@ -1264,16 +1283,16 @@ class TestStreamlinkYouTubeOwnership(unittest.IsolatedAsyncioTestCase):
         self.assertIn(watch_url, legacy_sl_cmd)
         self.assertNotIn(f"hls://{watch_url}", legacy_sl_cmd)
 
-        # Proven 3-segment live edge
+        # Proven ULL-safe live edge
         self.assertIn("--hls-live-edge", sl_cmd)
         edge_idx = sl_cmd.index("--hls-live-edge")
-        self.assertEqual(sl_cmd[edge_idx + 1], "3")
+        self.assertEqual(sl_cmd[edge_idx + 1], "6")
 
         # Buffering and retry flags
         self.assertIn("--ringbuffer-size", sl_cmd)
         self.assertIn("--retry-open", sl_cmd)
         self.assertIn("--stream-segment-attempts", sl_cmd)
-        self.assertEqual(sl_cmd[-1], "audio_only,worst")
+        self.assertEqual(sl_cmd[-1], "360p,240p,worst")
 
         # FFmpeg stdin command: decode only, NO input rate throttling (-re or -readrate)
         ff_cmd = manager._build_ffmpeg_command(input_from_stdin=True)
@@ -1429,6 +1448,94 @@ class TestStreamlinkYouTubeOwnership(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(collected[0], chunk1)
         self.assertEqual(popen.call_count, 2)
         self.assertEqual(manager.failure_reason, CaptureFailureReason.EOF)
+
+    async def test_youtube_runtime_eof_refreshes_transport_inside_session(self) -> None:
+        """A recoverable YouTube EOF refreshes Streamlink without ending the logical session."""
+        chunk1 = b"\x01\x02" * 80000
+        chunk2 = b"\x03\x04" * 80000
+
+        processes = []
+        for chunk in (chunk1, chunk2):
+            sl_proc = MagicMock()
+            sl_proc.poll.return_value = 0
+            sl_proc.wait.return_value = 0
+            sl_proc.returncode = 0
+            sl_proc.stderr.readline.return_value = b""
+
+            ff_proc = MagicMock()
+            ff_proc.poll.return_value = 0
+            ff_proc.wait.return_value = 0
+            ff_proc.stderr.readline.return_value = b""
+            ff_proc.stdout.read.side_effect = [chunk, b""]
+            processes.extend((sl_proc, ff_proc))
+
+        manager = AudioStreamManager(
+            stream_url="https://www.youtube.com/watch?v=Nq2wYlWFucg",
+            chunk_duration_seconds=5.0,
+            max_internal_youtube_restarts=1,
+            youtube_internal_restart_delay_seconds=0.0,
+        )
+
+        with patch(
+            "src.audio_stream.subprocess.Popen",
+            side_effect=processes,
+        ) as popen:
+            collected = [c async for c in manager.stream_audio_chunks()]
+
+        self.assertEqual(collected, [chunk1, chunk2])
+        self.assertEqual(popen.call_count, 4)
+        self.assertEqual(manager.pcm_bytes_delivered, len(chunk1) + len(chunk2))
+        self.assertEqual(manager.failure_reason, CaptureFailureReason.EOF)
+
+    async def test_youtube_runtime_stall_refreshes_transport_inside_session(self) -> None:
+        """A live but silent Streamlink worker is replaced without ending the session."""
+        recovered_chunk = b"\x05\x06" * 80000
+
+        first_sl = MagicMock()
+        first_sl.poll.return_value = None
+        first_sl.wait.return_value = 0
+        first_sl.stderr.readline.return_value = b""
+        first_ff = MagicMock()
+        first_ff.poll.return_value = None
+        first_ff.wait.return_value = 0
+        first_ff.stderr.readline.return_value = b""
+
+        second_sl = MagicMock()
+        second_sl.poll.return_value = 0
+        second_sl.wait.return_value = 0
+        second_sl.returncode = 0
+        second_sl.stderr.readline.return_value = b""
+        second_ff = MagicMock()
+        second_ff.poll.return_value = 0
+        second_ff.wait.return_value = 0
+        second_ff.stderr.readline.return_value = b""
+
+        queue = MagicMock()
+        queue.get = AsyncMock(
+            side_effect=[asyncio.TimeoutError, recovered_chunk, None]
+        )
+        manager = AudioStreamManager(
+            stream_url="https://www.youtube.com/watch?v=Nq2wYlWFucg",
+            chunk_duration_seconds=0.01,
+            max_internal_youtube_restarts=1,
+            youtube_startup_timeout_seconds=0.02,
+            youtube_stall_timeout_seconds=0.02,
+            youtube_internal_restart_delay_seconds=0.0,
+        )
+
+        with (
+            patch(
+                "src.audio_stream.subprocess.Popen",
+                side_effect=[first_sl, first_ff, second_sl, second_ff],
+            ) as popen,
+            patch("src.audio_stream.asyncio.Queue", return_value=queue),
+        ):
+            collected = [c async for c in manager.stream_audio_chunks()]
+
+        self.assertEqual(collected, [recovered_chunk])
+        self.assertEqual(popen.call_count, 4)
+        self.assertEqual(manager.internal_youtube_restarts, 1)
+        self.assertEqual(manager.pcm_bytes_delivered, len(recovered_chunk))
 
     async def test_youtube_runtime_stall_negative_no_direct_fallback(self) -> None:
         """Negative guarantee: YouTube Streamlink stall fails back to supervisor without direct FFmpeg."""

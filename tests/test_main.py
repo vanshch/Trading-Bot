@@ -711,6 +711,7 @@ class TestTradeMonitoringService(unittest.IsolatedAsyncioTestCase):
 
         channel = self.config.channels[0]
         channel.url = "https://www.youtube.com/@LiveTrader/live"
+        self.config.capture.youtube_proxy_url = "socks5://127.0.0.1:40000"
 
         monitor_task = asyncio.create_task(self.service.monitor_channel(channel))
         for _ in range(25):
@@ -730,6 +731,9 @@ class TestTradeMonitoringService(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("manifest.googlevideo.com", call_kwargs["stream_url"])
         self.assertNotIn("url_refresher", call_kwargs)
+        self.assertEqual(
+            call_kwargs["youtube_proxy_url"], "socks5://127.0.0.1:40000"
+        )
 
     @patch("main.AudioStreamManager")
     @patch("src.stream_manager.StreamManager.check_live_status", new_callable=AsyncMock)
@@ -867,6 +871,7 @@ class TestTradeMonitoringService(unittest.IsolatedAsyncioTestCase):
         channel = self.config.channels[0]
         channel.url = "https://www.youtube.com/@LiveTrader/live"
         self.config.capture.live_poll_interval_seconds = 60.0
+        self.config.capture.provider_rate_limit_cooldown_seconds = 120.0
 
         async def mock_wait_cooldown(
             min_cooldown_seconds=0.0, stop_event=None, jitter_fn=None
@@ -920,6 +925,7 @@ class TestTradeMonitoringService(unittest.IsolatedAsyncioTestCase):
 
         channel = self.config.channels[0]
         channel.url = "https://www.youtube.com/@LiveTrader/live"
+        self.config.capture.provider_rate_limit_cooldown_seconds = 120.0
 
         cooldown_entered = asyncio.Event()
 
@@ -948,6 +954,47 @@ class TestTradeMonitoringService(unittest.IsolatedAsyncioTestCase):
         self.assertLess(elapsed, 0.5)
         # And after cancellation during cooldown, no post-cooldown resolver was called
         self.assertEqual(mock_check_live.call_count, 1)
+
+    @patch("main.AudioStreamManager")
+    @patch("src.stream_manager.StreamManager.check_live_status", new_callable=AsyncMock)
+    async def test_unknown_after_capture_requires_fresh_live_confirmation(
+        self,
+        mock_check_live: AsyncMock,
+        mock_audio_mgr_class: MagicMock,
+    ) -> None:
+        """An UNKNOWN boundary result cannot immediately create an empty restart session."""
+        unknown_seen = asyncio.Event()
+
+        async def tracked_check_live(*args, **kwargs):
+            if mock_check_live.call_count == 1:
+                return (StreamStatus.LIVE, "https://manifest.googlevideo.com/live.m3u8")
+            unknown_seen.set()
+            return (StreamStatus.UNKNOWN, None)
+
+        mock_check_live.side_effect = tracked_check_live
+        mock_audio_mgr = MagicMock()
+        mock_audio_mgr.bytes_per_second = 32000
+        mock_audio_mgr.audio_seconds_delivered = 0.0
+        mock_audio_mgr.failure_reason = CaptureFailureReason.TIMEOUT
+        mock_audio_mgr.internal_youtube_restarts = 3
+
+        async def empty_stream(stop_event=None):
+            return
+            yield b""
+
+        mock_audio_mgr.stream_audio_chunks = empty_stream
+        mock_audio_mgr.stop = AsyncMock()
+        mock_audio_mgr_class.return_value = mock_audio_mgr
+
+        with patch("src.audio_stream.RestartBackoffTracker.wait", new_callable=AsyncMock):
+            monitor_task = asyncio.create_task(
+                self.service.monitor_channel(self.config.channels[0])
+            )
+            await asyncio.wait_for(unknown_seen.wait(), timeout=1.0)
+            await asyncio.sleep(0.05)
+            self.assertEqual(mock_audio_mgr_class.call_count, 1)
+            self.service.stop()
+            await asyncio.wait_for(monitor_task, timeout=1.0)
 
     @patch(
         "src.notifier.TelegramNotifier.send_fast_audio_trade_alert",
@@ -1465,4 +1512,3 @@ class TestAsyncMainTestMode(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -241,6 +241,11 @@ class AudioStreamManager:
         sample_rate: int = 16000,
         channels: int = 1,
         max_consecutive_timeouts: int = 2,
+        max_internal_youtube_restarts: int = 0,
+        youtube_startup_timeout_seconds: float = 30.0,
+        youtube_stall_timeout_seconds: float = 15.0,
+        youtube_internal_restart_delay_seconds: float = 1.0,
+        youtube_proxy_url: str | None = None,
         use_streamlink: bool = True,
         direct_url: str | None = None,
     ) -> None:
@@ -250,6 +255,23 @@ class AudioStreamManager:
         self.sample_rate = sample_rate
         self.channels = channels
         self.max_consecutive_timeouts = max(1, int(max_consecutive_timeouts))
+        self.max_internal_youtube_restarts = max(
+            0, int(max_internal_youtube_restarts)
+        )
+        self.youtube_startup_timeout_seconds = max(
+            self.chunk_duration_seconds + 2.0,
+            float(youtube_startup_timeout_seconds),
+        )
+        self.youtube_stall_timeout_seconds = max(
+            self.chunk_duration_seconds + 2.0,
+            float(youtube_stall_timeout_seconds),
+        )
+        self.youtube_internal_restart_delay_seconds = max(
+            0.0, float(youtube_internal_restart_delay_seconds)
+        )
+        self.youtube_proxy_url = (
+            youtube_proxy_url.strip() if youtube_proxy_url else None
+        )
         self.use_streamlink = use_streamlink
         # 16-bit PCM = 2 bytes per sample
         self.sample_width = 2
@@ -264,6 +286,7 @@ class AudioStreamManager:
         self._fallback_attempted: bool = False
         self._active_transport: str = "none"
         self._pcm_bytes_delivered: int = 0
+        self._internal_youtube_restarts: int = 0
         self._failure_reason: CaptureFailureReason = CaptureFailureReason.NONE
         self._ffmpeg_stderr_tail: collections.deque[str] = collections.deque(maxlen=100)
         self._streamlink_stderr_tail: collections.deque[str] = collections.deque(
@@ -289,6 +312,11 @@ class AudioStreamManager:
         return self._pcm_bytes_delivered / self.bytes_per_second
 
     @property
+    def internal_youtube_restarts(self) -> int:
+        """Number of successful in-session YouTube transport refreshes."""
+        return self._internal_youtube_restarts
+
+    @property
     def is_youtube(self) -> bool:
         """Return True if the configured stream URL is a public YouTube URL."""
         return is_youtube_url(self.stream_url)
@@ -312,7 +340,7 @@ class AudioStreamManager:
         if not _is_streamlink_native_url(target) and not target.startswith("hls://"):
             target = f"hls://{target}"
 
-        return [
+        command = [
             sys.executable,
             "-m",
             "streamlink",
@@ -326,28 +354,30 @@ class AudioStreamManager:
             "--retry-open",
             "3",
             "--ringbuffer-size",
-            "64M",
+            "128M",
             "--stream-segment-attempts",
-            "5",
-            "--stream-segment-threads",
-            "1",
-            "--stream-segment-timeout",
-            "20",
-            "--hls-live-edge",
             "3",
+            "--stream-segment-threads",
+            "4",
+            "--stream-segment-timeout",
+            "8",
+            "--hls-live-edge",
+            "6",
             "--hls-playlist-reload-attempts",
-            "10",
+            "30",
             "--hls-playlist-reload-time",
-            "segment",
+            "default",
             "--stream-segmented-queue-deadline",
             "0",
             "--stream-timeout",
-            "120",
+            "180",
             "--http-timeout",
-            "30.0",
-            target,
-            "audio_only,worst",
+            "20.0",
         ]
+        if self.is_youtube and self.youtube_proxy_url:
+            command.extend(["--http-proxy", self.youtube_proxy_url])
+        command.extend([target, "360p,240p,worst"])
+        return command
 
     def _build_ffmpeg_command(self, *, input_from_stdin: bool = False) -> list[str]:
         """Build the PCM decoder command for Streamlink or direct URL input."""
@@ -357,7 +387,9 @@ class AudioStreamManager:
             "-loglevel",
             "warning",
             "-fflags",
-            "+genpts+discardcorrupt",
+            "+genpts+discardcorrupt+igndts",
+            "-err_detect",
+            "ignore_err",
             "-avoid_negative_ts",
             "make_zero",
         ]
@@ -569,7 +601,9 @@ class AudioStreamManager:
 
     def _start_reader_thread(self, loop: asyncio.AbstractEventLoop) -> None:
         """Start background stdout reader thread."""
-        self._reader_stop_event.clear()
+        # Each transport generation needs its own stop token. Reusing and clearing
+        # the previous token can revive an old reader which did not join promptly.
+        self._reader_stop_event = threading.Event()
         process = self._process
         queue = self._queue
         stop_event = self._reader_stop_event
@@ -687,6 +721,47 @@ class AudioStreamManager:
             self._check_rate_limit()
             return False
 
+    async def _restart_youtube_streamlink(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        stop_event: asyncio.Event | None = None,
+    ) -> bool:
+        """Refresh a stalled YouTube transport without ending its logical session."""
+        if not self.is_youtube or not self.use_streamlink:
+            return False
+
+        if self.youtube_internal_restart_delay_seconds > 0:
+            if stop_event is None:
+                await asyncio.sleep(self.youtube_internal_restart_delay_seconds)
+            else:
+                try:
+                    await asyncio.wait_for(
+                        stop_event.wait(),
+                        timeout=self.youtube_internal_restart_delay_seconds,
+                    )
+                    return False
+                except asyncio.TimeoutError:
+                    pass
+
+        logger.warning(
+            "Refreshing stalled YouTube Streamlink transport inside the active session."
+        )
+        await asyncio.to_thread(self._stop_active_processes_sync)
+        self._queue = asyncio.Queue(maxsize=20)
+        self._fallback_attempted = False
+        self._failure_reason = CaptureFailureReason.NONE
+        self._streamlink_stderr_tail.clear()
+        self._ffmpeg_stderr_tail.clear()
+        self._start_capture_processes()
+        if (
+            self._failure_reason == CaptureFailureReason.PROVIDER_RATE_LIMIT
+            or self._process is None
+        ):
+            return False
+        self._start_reader_thread(loop)
+        self._internal_youtube_restarts += 1
+        return True
+
     async def stream_audio_chunks(
         self, stop_event: asyncio.Event | None = None
     ) -> AsyncGenerator[bytes, None]:
@@ -695,6 +770,7 @@ class AudioStreamManager:
         self._fallback_attempted = False
         self._failure_reason = CaptureFailureReason.NONE
         self._pcm_bytes_delivered = 0
+        self._internal_youtube_restarts = 0
         loop = asyncio.get_running_loop()
         self._queue = asyncio.Queue(maxsize=20)
 
@@ -712,14 +788,25 @@ class AudioStreamManager:
 
             self._start_reader_thread(loop)
             consecutive_timeouts = 0
+            internal_youtube_restarts = 0
+            chunks_since_internal_restart = 0
             while self._is_running:
                 if stop_event and stop_event.is_set():
                     break
 
                 try:
+                    queue_timeout = (
+                        self.youtube_startup_timeout_seconds
+                        if self.is_youtube and chunks_since_internal_restart == 0
+                        else (
+                            self.youtube_stall_timeout_seconds
+                            if self.is_youtube
+                            else self.chunk_duration_seconds + 8.0
+                        )
+                    )
                     chunk = await asyncio.wait_for(
                         self._queue.get(),
-                        timeout=self.chunk_duration_seconds + 8.0,
+                        timeout=queue_timeout,
                     )
                     if chunk is None:
                         # EOF received
@@ -740,6 +827,18 @@ class AudioStreamManager:
                                 logger.warning("Streamlink diagnostic:\n%s", diag)
 
                             if self.is_youtube:
+                                if (
+                                    not self._check_rate_limit()
+                                    and internal_youtube_restarts
+                                    < self.max_internal_youtube_restarts
+                                ):
+                                    internal_youtube_restarts += 1
+                                    if await self._restart_youtube_streamlink(
+                                        loop, stop_event
+                                    ):
+                                        consecutive_timeouts = 0
+                                        chunks_since_internal_restart = 0
+                                        continue
                                 logger.warning(
                                     "Streamlink audio capture ended for YouTube (EOF/exit code %s); "
                                     "failing back to supervised restart loop without direct FFmpeg.",
@@ -781,6 +880,9 @@ class AudioStreamManager:
 
                     consecutive_timeouts = 0
                     self._pcm_bytes_delivered += len(chunk)
+                    chunks_since_internal_restart += 1
+                    if chunks_since_internal_restart >= 5:
+                        internal_youtube_restarts = 0
                     yield chunk
 
                 except asyncio.TimeoutError:
@@ -798,7 +900,11 @@ class AudioStreamManager:
                     ff_exited = (
                         self._process is not None and self._process.poll() is not None
                     )
-                    stalled = consecutive_timeouts >= self.max_consecutive_timeouts
+                    # A YouTube timeout already represents 15s without a complete
+                    # PCM chunk (30s during startup), so refresh immediately. Other
+                    # providers retain the configurable consecutive-timeout policy.
+                    timeout_limit = 1 if self.is_youtube else self.max_consecutive_timeouts
+                    stalled = consecutive_timeouts >= timeout_limit
 
                     if sl_exited or ff_exited or stalled:
                         if self._check_rate_limit():
@@ -818,6 +924,17 @@ class AudioStreamManager:
                                 logger.warning("Streamlink diagnostic:\n%s", diag)
 
                             if self.is_youtube:
+                                if (
+                                    internal_youtube_restarts
+                                    < self.max_internal_youtube_restarts
+                                ):
+                                    internal_youtube_restarts += 1
+                                    if await self._restart_youtube_streamlink(
+                                        loop, stop_event
+                                    ):
+                                        consecutive_timeouts = 0
+                                        chunks_since_internal_restart = 0
+                                        continue
                                 logger.warning(
                                     "Streamlink capture %s for YouTube; "
                                     "failing back to supervised restart loop without direct FFmpeg.",

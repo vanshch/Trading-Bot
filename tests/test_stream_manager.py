@@ -50,6 +50,26 @@ class TestStreamManager(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.manager.is_live)
         self.assertEqual(self.manager.status, StreamStatus.LIVE)
         self.assertEqual(self.manager.current_stream_url, url)
+        ydl_opts = mock_ydl_class.call_args.args[0]
+        self.assertEqual(ydl_opts["js_runtimes"], {"deno": {}})
+
+    @patch("yt_dlp.YoutubeDL")
+    async def test_youtube_resolution_uses_configured_proxy(
+        self, mock_ydl_class: MagicMock
+    ) -> None:
+        self.manager.config.youtube_proxy_url = "socks5://127.0.0.1:40000"
+        mock_ydl = MagicMock()
+        mock_ydl.extract_info.return_value = {
+            "is_live": True,
+            "url": "https://manifest.googlevideo.com/live.m3u8",
+        }
+        mock_ydl_class.return_value.__enter__.return_value = mock_ydl
+
+        status, _ = await self.manager.check_live_status()
+
+        self.assertEqual(status, StreamStatus.LIVE)
+        ydl_opts = mock_ydl_class.call_args.args[0]
+        self.assertEqual(ydl_opts["proxy"], "socks5://127.0.0.1:40000")
 
     @patch("yt_dlp.YoutubeDL")
     async def test_offline_stream_resolution(self, mock_ydl_class: MagicMock) -> None:

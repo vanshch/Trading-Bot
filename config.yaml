@@ -131,13 +131,19 @@ capture:
   frame_interval_seconds: 5.0
   live_poll_interval_seconds: 60.0
   stream_timeout_seconds: 15.0
+  youtube_proxy_url: "socks5://127.0.0.1:40000"
   max_consecutive_stream_errors: 5
+  audio_max_consecutive_timeouts: 2
+  youtube_max_internal_restarts: 3
+  youtube_startup_timeout_seconds: 30.0
+  youtube_stall_timeout_seconds: 15.0
+  youtube_internal_restart_delay_seconds: 1.0
   restart_initial_delay_seconds: 1.0
   restart_max_delay_seconds: 30.0
   restart_backoff_factor: 2.0
   restart_reset_window_seconds: 300.0
   restart_jitter_ratio: 0.0
-  provider_rate_limit_cooldown_seconds: 120.0
+  provider_rate_limit_cooldown_seconds: 0.0
 cv_filter:
   min_line_length_ratio: 0.1
   max_line_angle_degrees: 5.0
@@ -190,7 +196,7 @@ telegram:
   retry_delay_seconds: 2.0
   timeout_seconds: 10.0
 news:
-  enabled: true
+  enabled: false
   feed_url: https://nfs.faireconomy.media/ff_calendar_thisweek.json
   schedule_times:
   - "08:00"
@@ -204,4 +210,3 @@ news:
   timeout_seconds: 15.0
   max_retries: 3
   retry_delay_seconds: 3.0
-

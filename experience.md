@@ -119,10 +119,17 @@ artifacts. Add a lesson only when it changes routing, contract design, implement
 - Prefer semantic whitespace over decorative divider characters. Keep repeated icons only when they
   encode information, such as currency flags.
 
-## 8. Audit Evidence and Test Maintenance
+## 8. Audit Evidence and Infrastructure Diagnostics
 
 - Define "broadcasted," "recorded," and "captured" before checking local, deployment, and provider evidence.
-- Discover the running resource and storage; never infer production topology from README instructions.
+- Discover running resources from live compute instances (`trade-bot-vm` in `us-central1-a` running
+  `trade-bot.service`); never conflate colloquial "cloud run" phrasing with Google Cloud Run (`run.googleapis.com`).
+- Always pass non-interactive batch flags (`gcloud --quiet`, `plink -batch`) and ensure SSH keys are cached;
+  never execute headless commands that can hang on interactive `y/N` prompts or host-key confirmations.
+- Query authoritative production logs via `journalctl -u trade-bot -o short-iso` on the VM rather than
+  inspecting local development logs or unmanaged scratch files.
+- For PowerShell-to-Linux diagnostics, avoid nested shell substitutions and long quoted scripts. Run
+  small read-only remote commands and parse their structured output locally.
 - Keep default test discovery bounded to the canonical `tests/` directory. Scratch trials must not be
   collected by normal CI or used to judge suite health.
 - Test count alone is not a pruning signal. Remove only superseded contracts, proven duplicates, or
@@ -131,8 +138,6 @@ artifacts. Add a lesson only when it changes routing, contract design, implement
   a timing flake; repair lifecycle synchronization instead of deleting the assertion.
 - Do not delete tests for code that still ships. Deprecate implementation and tests together while
   retaining coverage for compatibility DTOs or imports that remain active.
-- For PowerShell-to-Linux diagnostics, avoid nested shell substitutions and long quoted scripts. Run
-  small read-only remote commands and parse their structured output locally.
 
 ## 9. Definition of Done
 

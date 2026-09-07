@@ -130,11 +130,14 @@ class TradeMonitoringService:
             jitter_ratio=self.config.capture.restart_jitter_ratio,
         )
         stream_url: str | None = None
+        require_live_confirmation = False
+        consecutive_offline_checks = 0
+        offline_confirmed = False
 
         try:
             while not self._stop_event.is_set():
                 # 1. Check if stream is live
-                if not stream_mgr.is_live:
+                if not stream_mgr.is_live or require_live_confirmation:
                     ch_logger = get_channel_logger(channel.name, "OFFLINE", self.logger)
                     ch_logger.debug(
                         f"Polling channel live status (interval {poll_interval}s)..."
@@ -146,21 +149,48 @@ class TradeMonitoringService:
                     ) = await stream_mgr.check_live_status()
                     if stream_status != StreamStatus.LIVE or not resolved_stream_url:
                         if stream_status == StreamStatus.OFFLINE:
-                            # Only an explicit offline result may advance trade closure.
-                            await handle_confirmed_offline(ch_logger)
+                            if offline_confirmed:
+                                require_live_confirmation = False
+                            else:
+                                consecutive_offline_checks += 1
+                                if consecutive_offline_checks >= 2:
+                                    await handle_confirmed_offline(ch_logger)
+                                    require_live_confirmation = False
+                                    consecutive_offline_checks = 0
+                                    offline_confirmed = True
+                                    ch_logger.info(
+                                        "Channel confirmed offline after two independent checks."
+                                    )
+                                else:
+                                    require_live_confirmation = True
+                                    ch_logger.info(
+                                        "Channel reported offline (check 1 of 2); "
+                                        "waiting for confirmation before closing the broadcast."
+                                    )
                         else:
-                            ch_logger.debug(
-                                "Live status is temporarily unknown; preserving "
-                                "trade state and retrying."
-                            )
+                            consecutive_offline_checks = 0
+                            require_live_confirmation = not offline_confirmed
+                            if not offline_confirmed:
+                                ch_logger.debug(
+                                    "Live status is temporarily unknown; preserving "
+                                    "trade state without starting an empty capture session."
+                                )
 
+                        recheck_delay = (
+                            min(poll_interval, 30.0)
+                            if require_live_confirmation
+                            else poll_interval
+                        )
                         try:
                             await asyncio.wait_for(
-                                self._stop_event.wait(), timeout=poll_interval
+                                self._stop_event.wait(), timeout=recheck_delay
                             )
                             break
                         except asyncio.TimeoutError:
                             continue
+                    require_live_confirmation = False
+                    consecutive_offline_checks = 0
+                    offline_confirmed = False
                     stream_url = resolved_stream_url
                     ch_logger = get_channel_logger(channel.name, "LIVE", self.logger)
                     ch_logger.info(
@@ -188,12 +218,29 @@ class TradeMonitoringService:
                 audio_mgr = AudioStreamManager(
                     stream_url=audio_input_url,
                     chunk_duration_seconds=chunk_duration,
+                    max_consecutive_timeouts=(
+                        self.config.capture.audio_max_consecutive_timeouts
+                    ),
+                    max_internal_youtube_restarts=(
+                        self.config.capture.youtube_max_internal_restarts
+                    ),
+                    youtube_startup_timeout_seconds=(
+                        self.config.capture.youtube_startup_timeout_seconds
+                    ),
+                    youtube_stall_timeout_seconds=(
+                        self.config.capture.youtube_stall_timeout_seconds
+                    ),
+                    youtube_internal_restart_delay_seconds=(
+                        self.config.capture.youtube_internal_restart_delay_seconds
+                    ),
+                    youtube_proxy_url=self.config.capture.youtube_proxy_url,
                 )
                 self._audio_stream_managers.append(audio_mgr)
 
                 session_rec = self.session_logger.start_session(
                     channel_name=channel.name,
                     channel_url=channel.url,
+                    broadcast_id=stream_mgr.broadcast_id,
                 )
                 stream_start_time = time.time()
                 ch_logger.info(
@@ -410,7 +457,17 @@ class TradeMonitoringService:
                     # status resolution begins. This also lets stderr drain threads
                     # publish their final structured failure reason.
                     capture_end_time = time.time()
-                    await audio_mgr.stop()
+                    cleanup_cancelled = False
+                    stop_task = asyncio.create_task(audio_mgr.stop())
+                    try:
+                        await asyncio.shield(stop_task)
+                    except asyncio.CancelledError:
+                        # Persist the session even if shutdown cancellation arrives
+                        # while process cleanup is still in progress.
+                        cleanup_cancelled = True
+                        session_cancelled = True
+                        session_error = session_error or "Monitoring task cancelled"
+                        await stop_task
                     if audio_mgr in self._audio_stream_managers:
                         self._audio_stream_managers.remove(audio_mgr)
 
@@ -430,30 +487,90 @@ class TradeMonitoringService:
                     elif not self._stop_event.is_set() and not session_cancelled:
                         stream_status, _ = await stream_mgr.check_live_status()
                         if stream_status == StreamStatus.LIVE:
+                            require_live_confirmation = False
+                            consecutive_offline_checks = 0
+                            offline_confirmed = False
                             session_error = (
                                 session_error
                                 or "Audio stream ended while channel was still live"
                             )
                         elif stream_status == StreamStatus.OFFLINE:
-                            session_status = "COMPLETED"
-                            await handle_confirmed_offline(ch_logger)
+                            consecutive_offline_checks = 1
+                            ch_logger.info(
+                                "Channel reported offline at the capture boundary; "
+                                "performing a second independent check."
+                            )
+                            try:
+                                await asyncio.wait_for(
+                                    self._stop_event.wait(),
+                                    timeout=min(poll_interval, 5.0),
+                                )
+                            except asyncio.TimeoutError:
+                                confirmed_status, confirmed_url = (
+                                    await stream_mgr.check_live_status()
+                                )
+                                if confirmed_status == StreamStatus.OFFLINE:
+                                    consecutive_offline_checks = 0
+                                    require_live_confirmation = False
+                                    session_status = "COMPLETED"
+                                    offline_confirmed = True
+                                    await handle_confirmed_offline(ch_logger)
+                                    ch_logger.info(
+                                        "Channel confirmed offline after two independent checks."
+                                    )
+                                elif confirmed_status == StreamStatus.LIVE:
+                                    consecutive_offline_checks = 0
+                                    require_live_confirmation = False
+                                    offline_confirmed = False
+                                    if confirmed_url:
+                                        stream_url = confirmed_url
+                                    session_error = (
+                                        session_error
+                                        or "Audio stream ended while channel was still live"
+                                    )
+                                else:
+                                    consecutive_offline_checks = 0
+                                    require_live_confirmation = True
+                                    session_error = (
+                                        session_error
+                                        or "Audio stream ended while live status was temporarily unknown"
+                                    )
                         else:
+                            require_live_confirmation = True
+                            consecutive_offline_checks = 0
                             session_error = (
                                 session_error
                                 or "Audio stream ended while live status was temporarily unknown"
                             )
 
                     backoff_tracker.record_session(session_duration, session_status)
+                    raw_internal_restarts = getattr(
+                        audio_mgr, "internal_youtube_restarts", 0
+                    )
+                    internal_restarts = (
+                        raw_internal_restarts
+                        if isinstance(raw_internal_restarts, int)
+                        else 0
+                    )
                     self.session_logger.end_session(
                         session_rec.session_id,
                         status=session_status,
                         error=session_error,
                         audio_seconds_captured=audio_mgr.audio_seconds_delivered,
                         duration_seconds=session_duration,
+                        internal_transport_restarts=internal_restarts,
                     )
+                    if internal_restarts:
+                        ch_logger.info(
+                            "Kept the logical capture session alive through %s internal "
+                            "YouTube transport restart(s).",
+                            internal_restarts,
+                        )
+                    if cleanup_cancelled:
+                        raise asyncio.CancelledError
 
                 if session_status == "INTERRUPTED" and not self._stop_event.is_set():
-                    if is_rate_limited:
+                    if is_rate_limited and self.config.capture.provider_rate_limit_cooldown_seconds > 0:
                         cooldown = (
                             self.config.capture.provider_rate_limit_cooldown_seconds
                         )
@@ -472,15 +589,25 @@ class TradeMonitoringService:
                             status, resolved_url = await stream_mgr.check_live_status()
                             if status == StreamStatus.LIVE and resolved_url:
                                 stream_url = resolved_url
+                                require_live_confirmation = False
+                                consecutive_offline_checks = 0
+                                offline_confirmed = False
                             elif status == StreamStatus.OFFLINE:
-                                await handle_confirmed_offline(ch_logger)
-                                # The post-cooldown check already established that
-                                # the channel is offline. Resume normal offline
-                                # polling only after its configured interval instead
-                                # of resolving it a second time immediately.
+                                require_live_confirmation = True
+                                consecutive_offline_checks = 1
+                            else:
+                                require_live_confirmation = True
+                                consecutive_offline_checks = 0
+                            if require_live_confirmation:
+                                confirmation_delay = (
+                                    min(poll_interval, 5.0)
+                                    if status == StreamStatus.OFFLINE
+                                    else min(poll_interval, 30.0)
+                                )
                                 try:
                                     await asyncio.wait_for(
-                                        self._stop_event.wait(), timeout=poll_interval
+                                        self._stop_event.wait(),
+                                        timeout=confirmation_delay,
                                     )
                                 except asyncio.TimeoutError:
                                     pass
