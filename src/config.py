@@ -3,7 +3,7 @@
 import os
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 import yaml
@@ -278,6 +278,19 @@ class CVFilterConfig(BaseModel):
     )
 
 
+class LLMRoute(BaseModel):
+    """One model in operator-defined quality order; endpoints are fixed in code."""
+
+    provider: Literal["gemini", "groq", "cerebras", "sambanova", "openrouter"]
+    model: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def require_free_openrouter(self) -> "LLMRoute":
+        if self.provider == "openrouter" and not self.model.endswith(":free"):
+            raise ValueError("OpenRouter fallback must use an explicit :free model")
+        return self
+
+
 class AIConfig(BaseModel):
     """Gemini Vision AI verification settings."""
 
@@ -299,6 +312,11 @@ class AIConfig(BaseModel):
     timeout_seconds: float = Field(
         default=15.0, gt=1.0, description="Per-request timeout in seconds"
     )
+    fallback_models: list[LLMRoute] = Field(default_factory=list)
+    rate_limit_cooldown_seconds: float = Field(default=60.0, ge=1)
+    daily_quota_cooldown_seconds: float = Field(default=86400.0, ge=60)
+    failure_cooldown_seconds: float = Field(default=30.0, ge=1)
+    verification_timeout_seconds: float = Field(default=60.0, ge=1)
 
 
 class AudioSTTConfig(BaseModel):
@@ -486,6 +504,9 @@ class AppConfig(BaseModel):
         description="Pool of Groq Speech-to-Text API keys for round-robin rotation and fallback",
     )
     gemini_api_key: SecretStr = Field(..., description="Google Gemini Vision API key")
+    cerebras_api_key: SecretStr = Field(default=SecretStr(""))
+    sambanova_api_key: SecretStr = Field(default=SecretStr(""))
+    openrouter_api_key: SecretStr = Field(default=SecretStr(""))
     telegram_bot_token: SecretStr = Field(..., description="Telegram bot API token")
     telegram_chat_id: str = Field(
         ..., min_length=1, description="Telegram target chat or user ID"
@@ -540,6 +561,11 @@ def load_config(
         load_dotenv(dotenv_path=env_path)
     else:
         load_dotenv()
+
+    # Optional separate credential handoff, adjacent to the selected .env file.
+    # Existing environment/.env values always take precedence.
+    secret_dir = Path(env_path).resolve().parent if env_path is not None else Path.cwd()
+    load_dotenv(secret_dir / ".env.providers.local", override=False)
 
     yaml_file = Path(yaml_path) if yaml_path else Path("config.yaml")
     raw_yaml: dict[str, Any] = {}
@@ -603,6 +629,8 @@ def load_config(
     raw_yaml["groq_api_key"] = groq_keys[0]
     raw_yaml["groq_api_keys"] = groq_keys
     raw_yaml["gemini_api_key"] = gemini_key
+    for provider in ("cerebras", "sambanova", "openrouter"):
+        raw_yaml[f"{provider}_api_key"] = os.getenv(f"{provider.upper()}_API_KEY", "").strip()
     raw_yaml["telegram_bot_token"] = tg_token
     raw_yaml["telegram_chat_id"] = tg_chat_id
     raw_yaml["log_level"] = log_level

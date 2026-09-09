@@ -1,6 +1,6 @@
 # YouTube Live Stream Trade Monitoring Bot
 
-An audio-first monitoring worker that polls YouTube trading channels, translates live audio to English with Groq Audio Translations (`whisper-large-v3`), detects configured entry and position-management phrases, verifies candidates from the transcript plus a live screenshot with Gemini, and dispatches Telegram alerts. The OpenCV filter is currently used by the offline video benchmark, not by the live orchestration loop.
+An audio-first monitoring worker that polls YouTube trading channels, translates live audio to English with Groq Audio Translations (`whisper-large-v3`), detects configured entry and position-management phrases, verifies candidates with an ordered LLM provider chain (Gemini supports screenshots; other routes use transcripts), and dispatches Telegram alerts. The OpenCV filter is currently used by the offline video benchmark, not by the live orchestration loop.
 
 ---
 
@@ -25,7 +25,7 @@ An audio-first monitoring worker that polls YouTube trading channels, translates
         └──► [Current Chart Screenshot via OpenCV VideoCapture]
                        │
                        ▼
-          [Gemini Multimodal Verification]
+          [Ordered LLM Verification + Cooldowns]
                        │
                        ▼
 [TradeStateTracker (NEW_TRADE, MANAGEMENT_UPDATE, TRADE_CLOSED)]
@@ -427,6 +427,67 @@ python scripts/monitor_service.py --duration 3600 --interval 60
 python scripts/monitor_service.py --duration 3600 --output-json report.json
 ```
 
+### Live Stream Audio Capture Coverage (Production Telemetry)
+
+Telemetry recorded from multi-hour production live streams on `trade-bot-vm` (`data/live_sessions.json`):
+
+| Session Broadcast ID | Date & Time (UTC) | Stream Duration | Audio Captured | Live Audio Coverage | Chunks | Audio Triggers | Dispatched Trades | Status |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `XJJCSFVadlY` | 2026-09-04 09:30–12:35 | 11,102.0s (~3.08h) | 10,940.0s | **98.54%** | 1,094 | 117 | 4 | COMPLETED |
+| `frHRy1aCe5U` | 2026-09-07 03:37–06:40 | 10,993.6s (~3.05h) | 10,870.0s | **98.88%** | 1,087 | 128 | 0 | COMPLETED |
+| `Mm1WHSH4unQ` | 2026-09-07 09:31–12:31 | 10,834.7s (~3.01h) | 10,640.0s | **98.20%** | 1,064 | 129 | 4 | COMPLETED |
+
+- **Audio Capture Reliability**: The Streamlink unthrottled PCM capture pipeline delivers **98.54% average audio coverage** across continuous 3+ hour broadcasts. The missing ~1.5% occurs almost exclusively during broadcast sign-off before channel offline status is established.
+- **Verification Decision Bottleneck**: While audio ingestion achieved >98% coverage, AI decision coverage suffered a steep drop after the first 30–45 minutes due to the Gemini free tier limit (20 req/day). Over 1,136 `429 RESOURCE_EXHAUSTED` errors were logged across the day, dropping 178 verification evaluations and blinding the bot to subsequent trades.
+
+### Immediate Next Problem: Suppress Spurious Alerts on UNKNOWN or Missing Instruments
+
+- **Symptom**: On September 7 at `10:00:13 UTC`, the bot dispatched `DISPATCHING ENTRY ALERT: SELL on UNKNOWN` with confidence 0.85 when the transcript was *"Entry closed. Entry active. Entry here is 410.9."*
+- **Root Cause**: Neither [`src/state_tracker.py`](file:///d:/projects/bot_agy/src/state_tracker.py) nor [`main.py`](file:///d:/projects/bot_agy/main.py) checks whether `trade.instrument` is `"UNKNOWN"` or empty before triggering an alert.
+- **Required Fix**: Enforce fail-closed instrument validation. If `trade.instrument in ("UNKNOWN", "", None)`:
+  - Do not dispatch an alert to Telegram.
+  - Require the multimodal verifier to resolve an explicit tradable ticker (e.g. `BTCUSDT`, `XAUUSD`, `NIFTY`) before transitioning state to `NEW_TRADE`.
+
+### Production Engineering Backlog (To Be Solved)
+
+#### 1. Multi-provider verification fallback (implemented locally; deployment pending)
+
+`ai.model_name` is the primary Gemini route. `ai.fallback_models` is an explicit ordered list of `{provider, model}` entries, tried once each on failure. The configured preference is Gemini 3.6 / 3.7 / 2.5 Flash, Cerebras GPT-OSS 120B, Groq GPT-OSS 120B, SambaNova DeepSeek V3.1, Groq/SambaNova Llama 3.3 70B, OpenRouter free Llama 3.3 70B, then Groq Llama 3.1 8B. This is an operator quality preference, not a verified trading-accuracy ranking. Models and free access can change; unavailable models fall through.
+
+- Optional credentials: `CEREBRAS_API_KEY`, `SAMBANOVA_API_KEY`, `OPENROUTER_API_KEY`. Groq chat reuses `GROQ_API_KEY`; transcription is unchanged. Missing optional keys skip that provider.
+- The separate private file `.env.providers.local` is git-ignored and loaded beside the selected `--env` file (current directory by default). Existing environment and `.env` values take precedence. Never commit it or print its contents.
+- A 429 advances immediately. Model cooldown defaults to 60 seconds and honors longer `Retry-After` / reset durations. Explicit daily exhaustion uses a conservative 86,400-second cooldown, even when the provider suggests a short minute retry. Auth/billing failures cool down the provider for 86,400 seconds; missing models cool down that model. Other failures/malformed output cool down for 30 seconds.
+- Cooldowns are in memory, shared across channels by one verifier, and reset on process restart. Higher-ranked models are retried after cooldown expires. Selection is serialized to prevent concurrent quota storms.
+- Per-request timeout is 15 seconds; total verification budget is 60 seconds. A slow chain may not reach its lowest route within that budget. The old `ai.max_retries` / `retry_delay_seconds` fields remain accepted for compatibility but do not multiply waterfall attempts. Gemini SDK retries are disabled for generation.
+- Non-Gemini routes receive text only, even when screenshots are enabled. Their prompts explicitly prohibit invented visual evidence. Responses use the same schema and confidence threshold. A valid `NONE` stops the chain. Total provider failure marks verification unavailable and skips trade-state processing, preserving an existing position.
+- OpenRouter routes must name an explicit `:free` model; paid routes are rejected at configuration load. No billing method is added by the application. Cerebras onboarding currently offers limited $5 trial credits, not unlimited recurring free usage. SambaNova's new-account console may require credits despite its published free-tier limits; API smoke testing determines usability.
+- September 8 cloud inspection confirmed `trade-bot` active at `/opt/youtube-live-trade-monitor`, with Gemini daily-quota 429s still occurring at 12:31:56 UTC. This observation precedes deployment of this change.
+
+Provider references: [Groq models/limits](https://console.groq.com/docs/rate-limits), [Cerebras model catalog](https://inference-docs.cerebras.ai/models/overview), [SambaNova limits](https://docs.sambanova.ai/docs/en/models/rate-limits), [OpenRouter free limits](https://openrouter.ai/pricing). Account-specific quota is authoritative; earlier fixed RPD claims have been removed.
+
+Validation: `.venv/Scripts/python.exe -m pytest tests/test_llm_fallback.py tests/test_multimodal_verifier.py tests/test_config.py tests/test_main.py -q`. These cover ordered failover, cooldown recovery, daily quota, concurrent triggers, missing keys, malformed output and free-model configuration. Metadata preflight checks model access, not remaining generation quota or classification accuracy.
+
+#### 2. Suppress Phantom EXIT Alerts While IDLE
+- **Problem**: On September 7 at `04:30:46 UTC`, the bot dispatched `DISPATCHING TRADE CLOSED / EXIT ALERT for Mehak Trades` when the streamer said *"BTC closed. BTC closed. Closing. Just wait. Don't enter now"*. The streamer was discussing a candle close, not closing an open trade. The bot had no open position tracked.
+- **Root Cause**: [`src/state_tracker.py`](file:///d:/projects/bot_agy/src/state_tracker.py) synthesizes an `ephemeral_trade` and returns `StateTransition.TRADE_CLOSED` even when `record.state == TradeState.IDLE`.
+- **Required Fix**: If `record.state == TradeState.IDLE`, an `EXIT` signal must transition to `StateTransition.NONE` and never broadcast an exit alert.
+
+#### 3. Filter Live Chat Viewer Acknowledgments & Streamer Banter
+- **Problem**: Streamers frequently read viewer comments (e.g., *"My running trade is short from 18. Very good."*) or discuss educational hypotheticals (*"Now that gap will be filled on retest, pinpoint entry on retest"*), which Gemini verified as live entry signals.
+- **Required Fix**: Strengthen the system prompt in [`src/multimodal_verifier.py`](file:///d:/projects/bot_agy/src/multimodal_verifier.py) to explicitly demand first-person, present-tense execution confirmation by the streamer, and penalize passive chat reading or conditional level setups.
+
+#### 4. Compound Audio Trigger Gating
+- **Problem**: Generic standalone words like `active`, `scalping`, `position`, `sell` trigger verification during casual conversation, burning API quotas (129 triggers in 3 hours).
+- **Required Fix**: Require compound matching (e.g., action verb AND instrument/price level) or negative chat-filtering before invoking remote LLMs.
+
+#### 5. Re-enable Lightweight Vision Verification
+- **Problem**: `screenshots_enabled: false` forces the verifier to judge trade execution solely on audio, leading to direction hallucinations or false positives during ambiguous Hindi/English speech.
+- **Required Fix**: Re-enable screenshot capture during audio triggers or verify MT5/TradingView position boxes with an efficient vision gate.
+
+#### 6. Clean Streamlink Transport Shutdown at Stream End
+- **Problem**: When a live stream terminates, Streamlink logs up to 6 repeated transport stalls and restarts over 90 seconds before the channel is declared offline.
+- **Required Fix**: On transport timeout/EOF, immediately query channel liveness rather than looping through multiple restart cycles.
+
 ### Documentation contract
 
 `AGENTS.md` is the repository instruction source for automated coding harnesses. Any code change that alters architecture, configuration, commands, deployment, externally visible behaviour, operational constraints, or test workflow must update this README in the same change. README is the current-source-of-truth overview; implementation plans and `scratch/` are historical or experimental material.
@@ -487,7 +548,7 @@ This bot does continuous non-HTTP work. Deploy it as a Worker Pool, not as a Clo
 
 #### Option B: Compute Engine (current production deployment)
 
-If Worker Pools are unavailable in your region, use a Container-Optimized OS VM with a startup script or `cloud-init` that starts the Docker container. Do not use `gcloud compute instances create-with-container`; Google shut down its container startup agent on July 31, 2026. Follow the current [Compute Engine container migration guidance](https://cloud.google.com/compute/docs/containers/prepare-for-container-agent-shutdown).
+Production currently uses the `trade-bot` systemd unit at `/etc/systemd/system/trade-bot.service`, with working directory `/opt/youtube-live-trade-monitor` on `trade-bot-vm` in `us-central1-a`. Inspect the existing unit before deploying; the Docker instructions above are an alternative, not the current runtime. For a new container-based VM deployment, use a startup script or `cloud-init`. Do not use `gcloud compute instances create-with-container`; Google shut down its container startup agent on July 31, 2026. Follow the current [Compute Engine container migration guidance](https://cloud.google.com/compute/docs/containers/prepare-for-container-agent-shutdown).
 
 ---
 

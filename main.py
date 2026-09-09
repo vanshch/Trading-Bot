@@ -66,6 +66,12 @@ class TradeMonitoringService:
         self.multimodal_verifier = MultimodalVerifier(
             api_key=config.gemini_api_key.get_secret_value(),
             config=config.ai,
+            provider_keys={
+                "groq": config.groq_api_key.get_secret_value(),
+                "cerebras": config.cerebras_api_key.get_secret_value(),
+                "sambanova": config.sambanova_api_key.get_secret_value(),
+                "openrouter": config.openrouter_api_key.get_secret_value(),
+            },
         )
         self.transcriber = AudioTranscriber(
             config=config.audio,
@@ -323,6 +329,9 @@ class TradeMonitoringService:
                                     trigger_phrase=matched_kw or text,
                                     trader_profile=channel.trader_profile or "",
                                 )
+                                if getattr(verification, "verification_unavailable", False) is True:
+                                    ch_logger.warning("Verification unavailable; preserving tracked position state")
+                                    continue
 
                                 signal_type = getattr(
                                     verification,
@@ -331,7 +340,7 @@ class TradeMonitoringService:
                                 )
 
                                 ch_logger.info(
-                                    f"Gemini Multimodal Result: signal={signal_type}, "
+                                    f"LLM Verification Result: signal={signal_type}, "
                                     f"is_active={verification.is_trade_active}, "
                                     f"dir={verification.direction}, inst={verification.instrument}, "
                                     f"conf={verification.confidence:.2f}"

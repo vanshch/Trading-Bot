@@ -90,7 +90,7 @@ def test_multimodal_verifier_suppresses_low_confidence_trade():
 
 
 @pytest.mark.asyncio
-async def test_multimodal_verifier_backoff_cap_at_30_seconds():
+async def test_multimodal_verifier_failure_moves_on_without_sleep():
     verifier = MultimodalVerifier(
         api_key="mock-key",
         config=AIConfig(max_retries=4, retry_delay_seconds=20.0),
@@ -113,14 +113,17 @@ async def test_multimodal_verifier_backoff_cap_at_30_seconds():
     assert res.is_trade_active is False
     assert res.confidence == 0.0
     assert res.direction == "NONE"
-    assert sleep_calls == [20.0, 30.0, 30.0]
+    assert sleep_calls == []
 
 
 @pytest.mark.asyncio
 async def test_multimodal_verifier_model_fallback_sequence():
     verifier = MultimodalVerifier(
         api_key="mock-key",
-        config=AIConfig(model_name="gemini-3.6-flash", max_retries=3, retry_delay_seconds=0.01),
+        config=AIConfig(model_name="gemini-3.6-flash", fallback_models=[
+            {"provider": "gemini", "model": "gemini-2.5-flash"},
+            {"provider": "gemini", "model": "gemini-3.7-flash"},
+        ]),
     )
     models_called = []
 

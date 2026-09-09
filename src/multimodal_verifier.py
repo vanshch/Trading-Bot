@@ -6,13 +6,15 @@ import asyncio
 import json
 import logging
 import re
+import time
 from typing import Any, Literal
 
 import cv2
 import numpy as np
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
-from src.config import AIConfig
+from src.config import AIConfig, LLMRoute
+from src.llm_fallback import chat_completion, failure_policy, model_accessible
 
 logger = logging.getLogger("trade_bot.multimodal_verifier")
 
@@ -70,6 +72,8 @@ Respond ONLY with a valid JSON object matching these exact keys:
 
 class MultimodalTradeVerification(BaseModel):
     """Structured validated trade verification result combining visual and spoken data."""
+
+    verification_unavailable: bool = Field(default=False, exclude=True)
 
     signal_type: SignalType = Field(
         default="NONE",
@@ -209,11 +213,27 @@ class MultimodalVerifier:
         api_key: str,
         config: AIConfig | None = None,
         client: Any = None,
+        provider_keys: dict[str, str] | None = None,
     ) -> None:
         self.api_key = api_key
         self.config = config or AIConfig()
         self._client = client
         self._owns_client = client is None
+        self._provider_keys = {"gemini": api_key, **(provider_keys or {})}
+        self._cooldowns: dict[tuple[str, str], float] = {}
+        self._route_lock = asyncio.Lock()
+        from src.logger import register_secret_for_redaction
+        for key in self._provider_keys.values():
+            register_secret_for_redaction(key)
+
+    def _routes(self):
+        routes = [LLMRoute(provider="gemini", model=self.config.model_name)]
+        seen = set()
+        for route in routes + self.config.fallback_models:
+            ident = (route.provider, route.model)
+            if ident not in seen and self._provider_keys.get(route.provider):
+                seen.add(ident)
+                yield route
 
     def _get_client(self) -> Any:
         """Lazily initialize Google GenAI SDK client."""
@@ -232,22 +252,22 @@ class MultimodalVerifier:
             self._client = None
 
     async def check_connection(self) -> bool:
-        """Verify that the API key can access the configured Gemini model."""
-        client = self._get_client()
-        try:
-            await asyncio.wait_for(
-                asyncio.to_thread(client.models.get, model=self.config.model_name),
-                timeout=self.config.timeout_seconds,
-            )
-            return True
-        except Exception as exc:  # noqa: BLE001
-            import logging as _log
-            _log.getLogger("trade_bot.multimodal_verifier").error(
-                "Gemini preflight failed for model %s (%s)",
-                self.config.model_name,
-                type(exc).__name__,
-            )
-            return False
+        """Check model access on any configured route (does not guarantee quota)."""
+        for route in self._routes():
+            try:
+                if route.provider == "gemini":
+                    await asyncio.wait_for(
+                        asyncio.to_thread(self._get_client().models.get, model=route.model),
+                        timeout=self.config.timeout_seconds,
+                    )
+                    return True
+                if await model_accessible(route.provider, route.model,
+                                          self._provider_keys[route.provider], self.config.timeout_seconds):
+                    return True
+            except Exception as exc:
+                logger.warning("Verification preflight provider=%s model=%s error=%s",
+                               route.provider, route.model, type(exc).__name__)
+        return False
 
     def _frame_to_jpeg_bytes(self, frame: np.ndarray | bytes) -> bytes:
         """Convert input frame representation to JPEG byte buffer."""
@@ -284,7 +304,8 @@ class MultimodalVerifier:
             response_mime_type="application/json",
             response_schema=MultimodalTradeVerification,
             http_options=types.HttpOptions(
-                timeout=int(self.config.timeout_seconds * 1000)
+                timeout=int(self.config.timeout_seconds * 1000),
+                retry_options=types.HttpRetryOptions(attempts=1),
             ),
         )
 
@@ -350,45 +371,55 @@ class MultimodalVerifier:
                 "instrument, direction, or prices from visual evidence."
             )
 
-        models_to_try = [self.config.model_name]
-        for fallback in ("gemini-2.5-flash", "gemini-3.7-flash"):
-            if fallback not in models_to_try:
-                models_to_try.append(fallback)
+        # Serialize provider selection so simultaneous channels cannot stampede an
+        # exhausted model. Cooldowns are shared across channels in this worker.
+        deadline = time.monotonic() + self.config.verification_timeout_seconds
+        async with self._route_lock:
+            for route in self._routes():
+                ident = (route.provider, route.model)
+                now = time.monotonic()
+                if now >= deadline:
+                    break
+                if max(self._cooldowns.get(ident, 0), self._cooldowns.get((route.provider, "*"), 0)) > now:
+                    continue
+                try:
+                    timeout = min(self.config.timeout_seconds, deadline - now)
+                    if route.provider == "gemini":
+                        raw_text = await asyncio.wait_for(asyncio.to_thread(
+                            self._call_gemini_multimodal_sync, self._get_client(),
+                            jpeg_bytes, prompt_text, route.model,
+                        ), timeout=timeout)
+                    else:
+                        text_prompt = prompt_text + (
+                            "\n\nThis provider receives NO screenshot. Use only explicit spoken evidence. "
+                            "Do not infer chart state, instrument, direction or prices from unseen visuals. "
+                            "Trader profile is background only, not evidence of the current instrument. "
+                            "If instrument or direction is ambiguous for ENTRY, return NONE."
+                        )
+                        raw_text = await chat_completion(
+                            route.provider, route.model, self._provider_keys[route.provider], text_prompt, timeout,
+                        )
+                    verification = self._parse_response(raw_text)
+                    # Only the transport may mark a result unavailable.
+                    verification.verification_unavailable = False
+                    logger.info(
+                        "Verification result provider=%s model=%s signal=%s confidence=%.2f",
+                        route.provider, route.model, verification.signal_type, verification.confidence,
+                    )
+                    # A valid NONE is a completed decision, not a reason to shop models.
+                    return verification
+                except Exception as exc:
+                    delay, category, provider_wide = failure_policy(exc, self.config)
+                    if route.provider == "openrouter" and category in ("daily_quota", "rate_limit"):
+                        provider_wide = True
+                    scope = (route.provider, "*") if provider_wide else ident
+                    self._cooldowns[scope] = time.monotonic() + delay
+                    logger.warning(
+                        "Verification fallback provider=%s model=%s reason=%s cooldown=%.0fs",
+                        route.provider, route.model, category, delay,
+                    )
 
-        client = self._get_client()
-        delay = self.config.retry_delay_seconds
-
-        for attempt in range(1, self.config.max_retries + 1):
-            model_to_use = models_to_try[(attempt - 1) % len(models_to_try)]
-            try:
-                raw_text = await asyncio.to_thread(
-                    self._call_gemini_multimodal_sync,
-                    client,
-                    jpeg_bytes,
-                    prompt_text,
-                    model_to_use,
-                )
-                verification = self._parse_response(raw_text)
-                logger.info(
-                    f"Multimodal Verification result ({model_to_use}): signal={verification.signal_type}, "
-                    f"is_active={verification.is_trade_active}, direction={verification.direction}, "
-                    f"instrument={verification.instrument}, confidence={verification.confidence:.2f}"
-                )
-                return verification
-            except Exception as exc:  # noqa: BLE001 - SDK boundary exposes varied exceptions
-                logger.warning(
-                    f"Gemini Multimodal attempt {attempt}/{self.config.max_retries} with model {model_to_use} failed: {exc}"
-                )
-                if attempt < self.config.max_retries:
-                    await asyncio.sleep(delay)
-                    delay = min(delay * 2.0, 30.0)
-
-        # Safe fallback
         return MultimodalTradeVerification(
-            signal_type="NONE",
-            is_trade_active=False,
-            direction="NONE",
-            instrument="UNKNOWN",
-            confidence=0.0,
-            reasoning="Gemini verification failed or timed out",
+            verification_unavailable=True,
+            reasoning="All configured verification routes failed, are cooling down, or exceeded the deadline",
         )
