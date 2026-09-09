@@ -42,6 +42,7 @@ An audio-first monitoring worker that polls YouTube trading channels, translates
 - **Provider-Aware Failure Fallbacks**:
   - **YouTube Streams**: When Streamlink fails at startup, exits, stalls, or reaches EOF, the audio capture session terminates cleanly and fails back to the outer supervised restart loop (with exponential backoff and live-status re-resolution). Direct FFmpeg fallback against signed Googlevideo URLs is explicitly disabled for YouTube to prevent HTTP 403 failure loops.
   - **Non-YouTube Streams**: Generic HLS streams (e.g., custom stream URLs) preserve one-shot direct FFmpeg fallback on Streamlink startup or runtime failures.
+- **YouTube Egress Proxy (Cloudflare WARP)**: Google Cloud datacenter IPs are periodically rate-limited by YouTube front-end anti-bot systems, producing HTTP 429 and format extraction failures (e.g., *'ERROR: [youtube] dvrpRRKYWOA: No video formats found!'*). To isolate YouTube ingestion from datacenter IP blacklisting, `capture.youtube_proxy_url` (e.g., `socks5://127.0.0.1:40000`) directs both `StreamManager` (yt-dlp via `ydl_opts["proxy"]`) and `AudioStreamManager` (Streamlink via `--http-proxy`) through a local Cloudflare WARP daemon running in SOCKS5 proxy mode (`warp-svc.service`). This routes YouTube metadata and HLS segment downloads through Cloudflare edge egress IPs while leaving LLM providers (Gemini, Groq), news feeds, and Telegram on native VM networking.
 
 ---
 
@@ -167,6 +168,7 @@ audio:
   temperature: 0.0
 
 capture:
+  youtube_proxy_url: "socks5://127.0.0.1:40000"  # Route YouTube capture through Cloudflare WARP proxy to prevent HTTP 429
   frame_interval_seconds: 5.0
   live_poll_interval_seconds: 60.0
   restart_initial_delay_seconds: 1.0
@@ -548,7 +550,7 @@ This bot does continuous non-HTTP work. Deploy it as a Worker Pool, not as a Clo
 
 #### Option B: Compute Engine (current production deployment)
 
-Production currently uses the `trade-bot` systemd unit at `/etc/systemd/system/trade-bot.service`, with working directory `/opt/youtube-live-trade-monitor` on `trade-bot-vm` in `us-central1-a`. Inspect the existing unit before deploying; the Docker instructions above are an alternative, not the current runtime. For a new container-based VM deployment, use a startup script or `cloud-init`. Do not use `gcloud compute instances create-with-container`; Google shut down its container startup agent on July 31, 2026. Follow the current [Compute Engine container migration guidance](https://cloud.google.com/compute/docs/containers/prepare-for-container-agent-shutdown).
+Production currently uses the `trade-bot` systemd unit at `/etc/systemd/system/trade-bot.service`, with working directory `/opt/youtube-live-trade-monitor` on `trade-bot-vm` in `us-central1-a`. The VM also runs `warp-svc.service` (Cloudflare WARP client) configured in SOCKS5 proxy mode on port 40000 (`warp-cli mode proxy`, `warp-cli proxy port 40000`) to supply the egress proxy for YouTube capture. Inspect the existing unit before deploying; the Docker instructions above are an alternative, not the current runtime. For a new container-based VM deployment, use a startup script or `cloud-init`. Do not use `gcloud compute instances create-with-container`; Google shut down its container startup agent on July 31, 2026. Follow the current [Compute Engine container migration guidance](https://cloud.google.com/compute/docs/containers/prepare-for-container-agent-shutdown).
 
 ---
 
