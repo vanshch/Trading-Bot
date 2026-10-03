@@ -19,7 +19,21 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: pip install -r requirements.txt
-      - run: python -m py_compile bot.py alerts.py config.py feed.py screenshots.py test_chart_delivery.py
+      - run: python -m py_compile bot.py alerts.py config.py feed.py tradingview_feed.py screenshots.py test_chart_delivery.py
       - run: python -m unittest discover -s tests -p test_alerts.py
       - run: python -m unittest discover -s tests -p test_screenshots.py
       - run: python -m unittest discover -s tests -p test_chart_scheduler.py
+      - run: python -m unittest discover -s tests -p test_tradingview_feed.py
+  tradingview-dependency:
+    runs-on: ubuntu-latest
+    env:
+      TESTING: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements-tradingview.txt
+      - run: python -c "from tradingview_feed import _client_type; _client_type()(auth_token='unauthorized_user_token')"
+      - run: python -m unittest discover -s tests -p test_tradingview_feed.py
+      - run: python -m unittest discover -s tools/tradingview_soak -p test_soak.py

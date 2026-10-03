@@ -1,0 +1,3 @@
+# Optional provider; install only in a Python 3.11+ environment.
+-r requirements.txt
+tvkit==0.18.0

@@ -150,7 +150,7 @@ async def alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     side_display = alert["side"].upper()
     side_icon = "🔺" if alert["side"] == "resistance" else "🔻"
-    offset_note = f"\n• *OANDA Alignment*: `{config.OANDA_PRICE_OFFSET:+.2f}` offset applied" if config.OANDA_PRICE_OFFSET != 0.0 else ""
+    offset_note = f"\n• *Twelve Data Offset*: `{config.OANDA_PRICE_OFFSET:+.2f}`" if latest and latest.get("source", "").startswith("Twelve Data") and config.OANDA_PRICE_OFFSET != 0.0 else ""
 
     msg = (
         f"🎯 *Level Rejection Alert #{alert['id']} Created* {side_icon}\n"
@@ -249,13 +249,13 @@ def build_status_text() -> str:
     two_green = "ON (One-Shot)" if alert_manager.is_setting_enabled("two_green_candles") else "OFF"
     two_red = "ON (One-Shot)" if alert_manager.is_setting_enabled("two_red_candles") else "OFF"
     active_alerts_cnt = len(alert_manager.get_active_price_alerts())
-    offset_str = f"{config.OANDA_PRICE_OFFSET:+.2f} (TradingView OANDA aligned)" if config.OANDA_PRICE_OFFSET != 0.0 else "None (Raw Feed)"
+    offset_str = f"{config.OANDA_PRICE_OFFSET:+.2f} (Twelve Data only)"
 
     return (
         f"📊 *Bot Status*\n"
         f"• *Uptime*: {config.state.get_uptime_str()}\n"
         f"• *Timeframe*: `{config.state.current_timeframe}`\n"
-        f"• *OANDA Price Offset*: `{offset_str}`\n"
+        f"• *Price Offset*: `{offset_str}`\n"
         f"• *2-Green Momentum Alert*: `{two_green}`\n"
         f"• *2-Red Momentum Alert*: `{two_red}`\n"
         f"• *Active Price Targets*: `{active_alerts_cnt}`\n"
@@ -346,7 +346,9 @@ async def candle_scheduler(app: Application):
             sent_alert = False
             candle_id = f"{tf}_{latest_candle['timestamp']}"
 
-            if candle_id == config.state.last_alerted_candle_time:
+            last_id = config.state.last_alerted_candle_time
+            previous_ts = int(last_id.split("_", 1)[1]) if last_id.startswith(tf + "_") else -1
+            if int(latest_candle['timestamp']) <= previous_ts:
                 logger.debug(f"Candle {candle_id} already processed, skipping duplicate.")
                 continue
 

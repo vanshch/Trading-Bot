@@ -150,6 +150,38 @@ LOG_LEVEL=INFO
 python bot.py
 ```
 
+## Optional TradingView OANDA feed
+
+`TRADINGVIEW_FEED_ENABLED=false` is the default. Enabling it tries anonymous
+`OANDA:XAUUSD` history through `tvkit==0.18.0` before Twelve Data and Yahoo.
+Use a **Python 3.11+ virtual environment** and install
+`pip install -r requirements-tradingview.txt`, then set
+`TRADINGVIEW_FEED_ENABLED=true` privately in `.env`.
+The base requirements and disabled configuration continue to support Python 3.10.
+If the optional package/runtime is unavailable, requests fail or time out, or source
+identity/OHLCV validation fails, the bot uses the existing fallback providers.
+
+The adapter supports 5m, 15m, 1h and 4h, requests 60 bars per history fetch and has
+a 25-second request deadline with bounded reconnect attempts. It verifies the
+server identifies `OANDA:XAUUSD` from OANDA, uses raw OHLC prices without the
+Twelve Data offset, converts bar-start timestamps to closed-bar end timestamps,
+and excludes forming bars from closed history. The scheduler suppresses equal
+or older candles when a provider replays history or fallback returns older data.
+OANDA session starts are preserved rather than forced to UTC epoch boundaries.
+
+The [BTC audit](docs/tradingview-feed-audit-20261004.md) found 39/39 successful
+history requests over approximately seven hours, all 35 due closes matching
+independent Binance OHLCV, and both recovery suites passing. This qualifies the
+observed BTC polling window; OANDA market-open/session reliability remains
+unmeasured. Repository merge does not deploy or enable the provider on the VM.
+Validate an isolated Python 3.11+ runtime, OANDA sessions and combined bot memory
+before enabling it there. Yahoo fallback remains gold futures, which can differ
+from spot; the Twelve Data offset is approximate and does not guarantee OANDA parity.
+
+Offline adapter checks: `python -m unittest discover -s tests -p test_tradingview_feed.py`.
+The preserved corrected Linux BTC harness and its eight regression checks are in
+`tools/tradingview_soak/`; see its README for the original procedure and stop state.
+
 ## 6. Optional Browserless TradingView screenshots
 
 After a triggered level rejection, false breakout, or fresh two-candle momentum alert,
