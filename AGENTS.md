@@ -17,7 +17,7 @@
 
 ### Local Execution & Testing
 - Run bot locally: `python bot.py`
-- Syntax check: `python -m py_compile bot.py alerts.py config.py feed.py`
+- Syntax check: `python -m py_compile bot.py alerts.py config.py feed.py screenshots.py`
 
 ### Production VM Management
 - Check service status: `systemctl status xauusd-bot.service`
@@ -27,11 +27,11 @@
 - Verify memory bounds: `systemctl status xauusd-bot.service | grep Memory`
 
 ### Production Code Deployment Flow
-1. Verify syntax locally: `python -m py_compile bot.py alerts.py config.py feed.py`
+1. Verify syntax locally: `python -m py_compile bot.py alerts.py config.py feed.py screenshots.py`
 2. Upload modified files to VM `/tmp`:
-   `gcloud compute scp bot.py alerts.py config.py feed.py trade-bot-vm:/tmp/ --zone=us-central1-a --quiet`
+   `gcloud compute scp bot.py alerts.py config.py feed.py screenshots.py trade-bot-vm:/tmp/ --zone=us-central1-a --quiet`
 3. Copy into `/opt/xauusd_telegram_bot` and restore ownership:
-   `sudo cp /tmp/bot.py /tmp/alerts.py /tmp/config.py /tmp/feed.py /opt/xauusd_telegram_bot/`
+   `sudo cp /tmp/bot.py /tmp/alerts.py /tmp/config.py /tmp/feed.py /tmp/screenshots.py /opt/xauusd_telegram_bot/`
    `sudo chown bot_deployer:bot_deployer /opt/xauusd_telegram_bot/*.py`
 4. Restart service and verify health:
    `sudo systemctl restart xauusd-bot.service`

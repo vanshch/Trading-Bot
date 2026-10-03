@@ -25,6 +25,13 @@ DEFAULT_TIMEFRAME = os.getenv("DEFAULT_TIMEFRAME", "15m").strip().lower()
 # (Empirical analysis showed Twelve Data sits +$0.50 to +$0.60 higher than OANDA; -0.50 calibrates it to OANDA)
 OANDA_PRICE_OFFSET = float(os.getenv("OANDA_PRICE_OFFSET", "-0.50"))
 
+# Optional chart enrichment. Credentials stay in .env; off until device testing passes.
+CHART_SCREENSHOTS_ENABLED = os.getenv("CHART_SCREENSHOTS_ENABLED", "false").lower() in ("true", "1", "yes")
+BROWSERLESS_API_TOKEN = os.getenv("BROWSERLESS_API_TOKEN", "").strip()
+BROWSERLESS_ENDPOINT = os.getenv("BROWSERLESS_ENDPOINT", "https://production-sfo.browserless.io").strip()
+BROWSERLESS_PROFILE = os.getenv("BROWSERLESS_PROFILE", "tradingview-test").strip()
+TRADINGVIEW_CHART_URL = os.getenv("TRADINGVIEW_CHART_URL", "https://www.tradingview.com/chart/").strip()
+
 
 is_testing = bool(os.getenv("TESTING") or os.getenv("PYTEST_CURRENT_TEST") or "unittest" in sys.modules)
 if not is_testing:

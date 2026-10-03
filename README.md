@@ -9,7 +9,7 @@ A high-performance real-time Telegram bot designed to monitor Gold spot market d
 ```
 [Market Data Ingestion]
    ├── Primary: Twelve Data API (XAU/USD real-time time-series)
-   │     └── Calibration: OANDA Offset (-$0.50) for 1:1 TradingView spot parity
+   │     └── Approximate calibration: OANDA Offset (-$0.50)
    └── Fallback: Yahoo Finance API (GC=F Gold Futures)
           │
           ▼
@@ -24,6 +24,9 @@ A high-performance real-time Telegram bot designed to monitor Gold spot market d
    ├── Momentum Streaks (2 Consecutive Green / 2 Consecutive Red)
    │     └── Streak Guard & One-Shot: Alerts strictly on sequence formation
    └── Event-Driven Dispatch: Zero spam, alerts only on triggers
+          │
+          ├── Optional Browserless /function capture (remote Chromium)
+          │   └── One OANDA TradingView photo per alerted candle, after text
           │
           ▼
 [Telegram Interactive Bot API]
@@ -67,8 +70,8 @@ A high-performance real-time Telegram bot designed to monitor Gold spot market d
 - **Corrective Calibration (`OANDA_PRICE_OFFSET = -0.50`)**:
   - Configurable via `OANDA_PRICE_OFFSET` in `config.py` / `.env` (default `-0.50`).
   - Automatically applied to Twelve Data's `open`, `high`, `low`, and `close`.
-  - **100% Invariant Pip Deltas & Candle Direction**: Because the offset is applied uniformly to all OHLC fields, candle color (green/red) and pip movements remain mathematically identical.
-  - **Seamless Alignment**: You can mark levels directly on TradingView's OANDA chart and set alerts using the exact price you see on TradingView without mental math.
+- **Invariant Pip Deltas & Candle Direction**: Because the offset is applied uniformly to all OHLC fields, candle color (green/red) and pip movements remain mathematically identical.
+- **Approximate Calibration**: The fixed offset does not guarantee parity with OANDA. Twelve Data uses a composite feed and Yahoo fallback uses gold futures. Set levels with that difference in mind.
 
 ---
 
@@ -146,3 +149,81 @@ LOG_LEVEL=INFO
 ```bash
 python bot.py
 ```
+
+## 6. Optional Browserless TradingView screenshots
+
+After a triggered level rejection, false breakout, or fresh two-candle momentum alert,
+the bot sends the existing text immediately. If enabled, it then sends **one shared
+photo per alerted candle**, even when multiple alerts fire. It makes no Browserless
+requests for quiet candles, startup greetings, or command responses. Captures have a
+60-second overall deadline and photo delivery a 20-second deadline; failures leave
+the text delivery intact. No retries are made, to bound latency and credit usage.
+
+The bot only uses async HTTP. Chromium runs on Browserless, outside the VM's 120 MB
+service budget. The image response is capped at 5 MB; live VM memory remains to be
+validated before deployment. Screenshots are OANDA visual context, may contain a
+forming candle, and can differ from the feed that triggered the alert. They do not
+replace the market-data pipeline. Existing candle deduplication and one-shot settings
+remain in control of triggers.
+
+The provider uses the documented [Function API](https://docs.browserless.io/rest-apis/function)
+and [authenticated profiles](https://docs.browserless.io/baas/features/authenticated-profiles).
+It requires a restored TradingView login, the OANDA gold chart header at the selected
+timeframe, and a rendered canvas before returning a PNG. TradingView UI changes or
+an expired login cause the optional photo to be skipped. API tokens use an
+Authorization header and are excluded from error logs.
+
+### Local device test before merging
+
+Use the PR worktree and install `requirements.txt` into a Python virtual environment.
+Put the existing Telegram credentials and these settings into the ignored `.env`:
+
+```ini
+CHART_SCREENSHOTS_ENABLED=false
+BROWSERLESS_API_TOKEN=your_private_browserless_token
+BROWSERLESS_ENDPOINT=https://production-sfo.browserless.io
+BROWSERLESS_PROFILE=tradingview-test
+TRADINGVIEW_CHART_URL=https://www.tradingview.com/chart/your_saved_layout/
+```
+
+Use the saved layout URL from the verified Browserless handoff to preserve drawings
+and indicators. Requests override its symbol with `OANDA:XAUUSD` and select the bot's
+timeframe (5m/15m/1h/4h). Defaults use the generic chart URL, which does not promise
+saved layout restoration.
+
+```powershell
+# Capture only; uses one Browserless request, does not contact Telegram.
+python test_chart_delivery.py --timeframe 15m
+
+# Send a clearly labeled test and chart to ALLOWED_USER_ID, without polling.
+python test_chart_delivery.py --send --timeframe 15m
+```
+
+The one-shot test explicitly enables capture for that invocation, while the normal
+bot remains disabled. Verify on the device that the test text arrives before the
+chart, the saved drawings/indicators render, and the OANDA symbol/timeframe is correct.
+Check the Browserless request log for units billed; the earlier handoff test took
+10.099 seconds and 1 unit, but that does not guarantee a fixed cost per capture.
+For live trigger validation, use a **separate test bot token** and enable
+`CHART_SCREENSHOTS_ENABLED=true` in that test environment. Running a second polling
+process with the production token would compete with the existing VM bot.
+
+### Offline checks and deployment gate
+
+```powershell
+python -m py_compile bot.py alerts.py config.py feed.py screenshots.py test_chart_delivery.py
+python -m unittest discover -s tests -p test_alerts.py
+python -m unittest discover -s tests -p test_screenshots.py
+python -m unittest discover -s tests -p test_chart_scheduler.py
+```
+
+CI runs the active XAU/USD suites on Python 3.10 and 3.12. Historical YouTube files
+remain in GitHub for now; their tests are outside this bot's runtime and CI scope.
+The PR records the existing local XAU/USD implementation in a baseline commit
+because GitHub main previously contained only the YouTube monitor, then adds the
+screenshot feature in a separate commit. Unrelated local deletions and experiments
+are excluded.
+
+Keep the PR draft until device testing passes. Merge and production deployment are
+separate later steps. Any eventual deployment must include `screenshots.py` alongside
+the four original modules and set credentials privately on the VM; never commit `.env`.

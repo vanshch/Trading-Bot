@@ -25,6 +25,16 @@ Last updated: 3 October 2026 (IST). Read README.md for architecture/commands; th
 - VM code: `/opt/tradingview-soak-20261003`; results: `/var/lib/tradingview-soak-20261003`. Full procedure/evidence pointers: [.experiments/tradingview-feed-probe-20261003/SOAK.md](.experiments/tradingview-feed-probe-20261003/SOAK.md).
 - Future adapter must convert TradingView bar-start timestamps to the bot's closed-bar end timestamps, exclude forming bars, deduplicate replayed candles, and apply no Twelve Data offset to OANDA data. Verify Python compatibility and memory before deployment.
 - Chart preview artifacts: `C:/Users/Lenovo/.codex/visualizations/2026/10/02/01a0fef5-933b-7d93-88a8-3ba4a0d64c30`.
-- Browserless setup was reported in a side chat; its configuration was not accessible/verified here. Obtain that handoff before using it.
+- Browserless handoff verified from the completed chat "Check Browserless TradingView access" and local evidence: `POST https://production-sfo.browserless.io/function`, authenticated profile `tradingview-test`, HTTP 200, logged-in OANDA XAU/USD 15-minute chart with saved drawings/indicators. Client duration 10.099 seconds; request log billed 1 unit, balance 979 -> 978 remaining. The used-total dashboard field was cached.
+- Handoff artifacts: `C:/Users/Lenovo/.codex/visualizations/2026/10/03/01a1015d-6ddf-7bb0-a215-d24af056e82e/browserless-test/` (`result.json`, `receipt.json`, screenshot, billing proof). Token is not recorded in project documentation; use the account token privately in `.env`. The saved layout URL is in the local `result.json`.
+
+## Browserless screenshot integration PR (3 October 2026)
+
+- Branch: `codex/browserless-alert-screenshots`; isolated worktree: `C:/Users/Lenovo/.codex/worktrees/browserless-alert-screenshots/bot_agy`. GitHub main still held the YouTube monitor; the first PR commit records the existing local XAU/USD bot, the second adds optional screenshots. Unrelated local deletions, archives, secrets and feed experiments are excluded.
+- Optional remote capture is disabled by default. Existing alert text goes first; one chart follows per alerted candle. No capture for quiet candles. Deadlines, bounded image size, PNG checks, restored-login/chart checks and sanitized errors contain capture failures. No local Chromium dependency, TradingView feed replacement or deployment.
+- Added `test_chart_delivery.py`: capture to disk or send a labeled test to the allowed Telegram user without starting polling or changing alert state. Configure the ignored worktree `.env` with the account token, verified profile and saved layout URL before running it.
+- Offline checks cover provider success/errors/timeouts/size, safe captions, cancellation, multiple alerts sharing one chart, candle deduplication, and both momentum directions. Device receipt, current saved-profile validity, all timeframe layouts and VM memory remain **pending**.
+- Validation: all 20 active offline tests passed on local Python 3.12; six runtime/test-entry modules passed compilation and Python 3.10 syntax parsing. GitHub CI is configured to run the active suites on Python 3.10 and 3.12.
+- Next gate: test the PR on the device and inspect chart content/Telegram delivery, then review and merge. Production remains unchanged. The separate market-open TradingView **feed** soak remains unpassed and is not a prerequisite for this visual-only feature.
 
 Legacy YouTube monitor is disabled; archives are in `archives/`. Deferred roadmap: live ticks, indicators, multiple assets and execution bridge.

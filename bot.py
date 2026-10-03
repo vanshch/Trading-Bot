@@ -15,6 +15,7 @@ from telegram.ext import (
 import config
 from config import logger
 import feed
+from screenshots import send_alert_chart
 from alerts import alert_manager
 
 def authorized_only(func: Callable) -> Callable:
@@ -342,6 +343,7 @@ async def candle_scheduler(app: Application):
                 continue
 
             latest_candle = closed_candles[-1]
+            sent_alert = False
             candle_id = f"{tf}_{latest_candle['timestamp']}"
 
             if candle_id == config.state.last_alerted_candle_time:
@@ -384,6 +386,7 @@ async def candle_scheduler(app: Application):
                     text=alert_msg,
                     parse_mode="Markdown"
                 )
+                sent_alert = True
 
             # 2. Check Two Consecutive Green Candles Alert (Streak Deduplication & One-Shot Auto-Reset)
             if alert_manager.is_setting_enabled("two_green_candles") and len(closed_candles) >= 2:
@@ -411,6 +414,7 @@ async def candle_scheduler(app: Application):
                             text=green_msg,
                             parse_mode="Markdown"
                         )
+                        sent_alert = True
 
             # 3. Check Two Consecutive Red Candles Alert (Streak Deduplication & One-Shot Auto-Reset)
             if alert_manager.is_setting_enabled("two_red_candles") and len(closed_candles) >= 2:
@@ -440,6 +444,11 @@ async def candle_scheduler(app: Application):
                             text=red_msg,
                             parse_mode="Markdown"
                         )
+                        sent_alert = True
+
+            # One shared visual for all alerts on this candle; text always goes first.
+            if sent_alert:
+                await send_alert_chart(app.bot, tf, latest_candle['time_str'], config.state.last_feed_source)
 
         except asyncio.CancelledError:
             logger.info("Candle scheduler cancelled.")
