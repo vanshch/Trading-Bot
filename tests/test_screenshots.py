@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -7,7 +8,7 @@ import httpx
 
 import config
 from screenshots import (ScreenshotSettings, capture_chart, chart_url_for_timeframe,
-                         send_alert_chart, PNG_SIGNATURE, MAX_IMAGE_BYTES)
+                         send_alert_chart, PNG_SIGNATURE, MAX_IMAGE_BYTES, MAX_RESPONSE_BYTES)
 
 
 class ScreenshotTests(unittest.IsolatedAsyncioTestCase):
@@ -22,7 +23,7 @@ class ScreenshotTests(unittest.IsolatedAsyncioTestCase):
             body = json.loads(request.content)
             self.assertIn("symbol=OANDA%3AXAUUSD&interval=60", body["context"]["url"])
             self.assertEqual(body["context"]["intervalLabels"], ["60", "1h"])
-            return httpx.Response(200, headers={"content-type": "image/png"}, content=PNG_SIGNATURE + b"test")
+            return httpx.Response(200, json={"screenshotBase64": base64.b64encode(PNG_SIGNATURE + b"test").decode()})
         image = await capture_chart(self.settings, "1h", transport=httpx.MockTransport(respond))
         self.assertTrue(image.startswith(PNG_SIGNATURE))
         self.assertNotIn("private-test-token", repr(self.settings))
@@ -31,9 +32,13 @@ class ScreenshotTests(unittest.IsolatedAsyncioTestCase):
         responses = [
             httpx.Response(401), httpx.Response(429), httpx.Response(503),
             httpx.Response(200, headers={"content-type": "text/html"}, content=b"login"),
-            httpx.Response(200, headers={"content-type": "image/png"}, content=b"not PNG"),
-            httpx.Response(200, headers={"content-type": "image/png"}, content=PNG_SIGNATURE),
-            httpx.Response(200, headers={"content-type": "image/png"}, content=PNG_SIGNATURE + b"x" * MAX_IMAGE_BYTES),
+            httpx.Response(200, json={"screenshotBase64": base64.b64encode(b"not PNG").decode()}),
+            httpx.Response(200, json={"screenshotBase64": base64.b64encode(PNG_SIGNATURE).decode()}),
+            httpx.Response(200, json={"screenshotBase64": base64.b64encode(PNG_SIGNATURE + b"x" * MAX_IMAGE_BYTES).decode()}),
+            httpx.Response(200, headers={"content-type": "application/json"}, content=b"x" * (MAX_RESPONSE_BYTES + 1)),
+            httpx.Response(200, json={"screenshotBase64": "invalid-base64!"}),
+            httpx.Response(200, json={"screenshotBase64": 123}),
+            httpx.Response(200, json=[]),
         ]
         for response in responses:
             with self.subTest(status=response.status_code, size=len(response.content)):
@@ -44,6 +49,11 @@ class ScreenshotTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(ValueError):
                     await capture_chart(self.settings, "15m", transport=httpx.MockTransport(respond))
                 self.assertEqual(len(calls), 1)
+
+    async def test_wrapped_hosted_response_is_decoded(self):
+        transport = httpx.MockTransport(lambda request: httpx.Response(
+            200, json={"data": {"screenshotBase64": base64.b64encode(PNG_SIGNATURE + b"test").decode()}}))
+        self.assertEqual(await capture_chart(self.settings, "15m", transport=transport), PNG_SIGNATURE + b"test")
 
     async def test_network_timeout_is_contained_and_log_does_not_expose_secret(self):
         bot = AsyncMock()

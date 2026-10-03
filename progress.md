@@ -37,4 +37,11 @@ Last updated: 3 October 2026 (IST). Read README.md for architecture/commands; th
 - Validation: all 20 active offline tests passed on local Python 3.12; six runtime/test-entry modules passed compilation and Python 3.10 syntax parsing. GitHub CI is configured to run the active suites on Python 3.10 and 3.12.
 - Next gate: test the PR on the device and inspect chart content/Telegram delivery, then review and merge. Production remains unchanged. The separate market-open TradingView **feed** soak remains unpassed and is not a prerequisite for this visual-only feature.
 
+### Live integration verification and merge authorization
+
+- User authorized merging PR #1 after tests complete. Initial live capture found the hosted function sandbox has no Node `Buffer` global. Replaced the binary return with bounded base64 JSON, decoded/validated in Python; added wrapped-response and invalid/oversized-payload coverage. Disabled HTTPX request-level logging to prevent Telegram token URLs in logs.
+- Corrected live captures passed for 5m, 15m, 1h and 4h, with OANDA headers, selected timeframes, saved drawings and indicators visually verified. Local images are preserved under the ignored worktree `.chart-artifacts/`.
+- Telegram accepted the labeled test text at approximately 17:54 IST, then the 15-minute chart (both HTTP 200). User confirmed both arrived on the device and the chart looks correct. No competing polling process or alert-state changes were made.
+- All 21 active offline tests and compilation passed after the fix. Updated CI must pass before the authorized merge. Production deployment and VM memory validation remain separate later steps.
+
 Legacy YouTube monitor is disabled; archives are in `archives/`. Deferred roadmap: live ticks, indicators, multiple assets and execution bridge.

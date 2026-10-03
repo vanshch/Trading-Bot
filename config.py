@@ -13,6 +13,8 @@ logging.basicConfig(
     level=getattr(logging, log_level_name, logging.INFO)
 )
 logger = logging.getLogger("xauusd_bot")
+# HTTPX request URLs include Telegram credentials; suppress request-level logs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 env_path = Path(__file__).parent / ".env"
 load_dotenv(dotenv_path=env_path)

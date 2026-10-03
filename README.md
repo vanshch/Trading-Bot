@@ -160,7 +160,8 @@ requests for quiet candles, startup greetings, or command responses. Captures ha
 the text delivery intact. No retries are made, to bound latency and credit usage.
 
 The bot only uses async HTTP. Chromium runs on Browserless, outside the VM's 120 MB
-service budget. The image response is capped at 5 MB; live VM memory remains to be
+service budget. Decoded images are capped at 5 MB and encoded responses at about
+7 MB; live VM memory remains to be
 validated before deployment. Screenshots are OANDA visual context, may contain a
 forming candle, and can differ from the feed that triggered the alert. They do not
 replace the market-data pipeline. Existing candle deduplication and one-shot settings
@@ -172,6 +173,14 @@ It requires a restored TradingView login, the OANDA gold chart header at the sel
 timeframe, and a rendered canvas before returning a PNG. TradingView UI changes or
 an expired login cause the optional photo to be skipped. API tokens use an
 Authorization header and are excluded from error logs.
+
+Live validation on 3 October passed for 5m, 15m, 1h and 4h using the saved profile
+and layout; drawings and indicators were visually checked. Telegram accepted the
+labeled 15-minute test text followed by the photo, and the user confirmed device
+receipt and chart correctness. The hosted function sandbox lacks Node's `Buffer`,
+so the provider returns bounded base64 JSON and Python decodes it before PNG
+validation. HTTPX request logs are suppressed because Telegram URLs contain bot
+credentials.
 
 ### Local device test before merging
 

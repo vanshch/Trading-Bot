@@ -1,5 +1,7 @@
 """Optional remote TradingView capture; no local browser or market-feed changes."""
 import asyncio
+import base64
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from io import BytesIO
@@ -12,6 +14,7 @@ from config import logger
 INTERVALS = {"5m": "5", "15m": "15", "1h": "60", "4h": "240"}
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
+MAX_RESPONSE_BYTES = ((MAX_IMAGE_BYTES + 2) // 3) * 4 + 1024
 CAPTURE_TIMEOUT = 60
 
 # Runs exclusively on Browserless. Readiness checks deliberately avoid a fixed price.
@@ -30,7 +33,9 @@ export default async ({ page, context }) => {
       [...document.querySelectorAll('canvas')].some(c => c.width > 400 && c.height > 200);
   }, {timeout:20000}, context.intervalLabels);
   await new Promise(r => setTimeout(r, 2500));
-  return {data:Buffer.from(await page.screenshot({type:'png'})), type:'image/png'};
+  // The hosted function runs in a browser sandbox without Node's Buffer global.
+  return {data:{screenshotBase64:await page.screenshot({type:'png', encoding:'base64'})},
+          type:'application/json'};
 };
 """
 
@@ -91,13 +96,21 @@ async def capture_chart(settings: ScreenshotSettings, timeframe: str, *, transpo
         ) as response:
             if response.status_code != 200:
                 raise ValueError(f"Browserless HTTP {response.status_code}")
-            if response.headers.get("content-type", "").split(";")[0] != "image/png":
-                raise ValueError("Browserless did not return a PNG chart")
-            image = bytearray()
+            if response.headers.get("content-type", "").split(";")[0] != "application/json":
+                raise ValueError("Browserless did not return a chart payload")
+            payload = bytearray()
             async for chunk in response.aiter_bytes():
-                if len(image) + len(chunk) > MAX_IMAGE_BYTES:
-                    raise ValueError("Browserless chart exceeds image size limit")
-                image.extend(chunk)
+                if len(payload) + len(chunk) > MAX_RESPONSE_BYTES:
+                    raise ValueError("Browserless chart exceeds response size limit")
+                payload.extend(chunk)
+    data = json.loads(payload)
+    if isinstance(data, dict) and "data" in data:
+        data = data["data"]
+    if not isinstance(data, dict) or not isinstance(data.get("screenshotBase64"), str):
+        raise ValueError("Browserless chart payload is missing")
+    image = base64.b64decode(data["screenshotBase64"], validate=True)
+    if len(image) > MAX_IMAGE_BYTES:
+        raise ValueError("Browserless chart exceeds image size limit")
     if not image.startswith(PNG_SIGNATURE) or len(image) <= len(PNG_SIGNATURE):
         raise ValueError("Browserless returned an invalid PNG")
     return bytes(image)
