@@ -23,9 +23,9 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 ALLOWED_USER_ID_STR = os.getenv("ALLOWED_USER_ID", "").strip()
 TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY", "").strip()
 DEFAULT_TIMEFRAME = os.getenv("DEFAULT_TIMEFRAME", "15m").strip().lower()
-# Calibration offset to align Twelve Data institutional mid-price feed with TradingView OANDA spot quotes
-# (Empirical analysis showed Twelve Data sits +$0.50 to +$0.60 higher than OANDA; -0.50 calibrates it to OANDA)
+# Approximate Twelve Data calibration only; it does not guarantee OANDA parity.
 OANDA_PRICE_OFFSET = float(os.getenv("OANDA_PRICE_OFFSET", "-0.50"))
+TRADINGVIEW_FEED_ENABLED = os.getenv("TRADINGVIEW_FEED_ENABLED", "false").strip().lower() in ("true", "1", "yes")
 
 # Optional chart enrichment. Credentials stay in .env; off until device testing passes.
 CHART_SCREENSHOTS_ENABLED = os.getenv("CHART_SCREENSHOTS_ENABLED", "false").lower() in ("true", "1", "yes")

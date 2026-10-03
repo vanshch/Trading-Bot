@@ -1,4 +1,5 @@
 import time
+import config
 import httpx
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, Tuple
@@ -207,6 +208,12 @@ async def fetch_yahoo_finance(timeframe: str = "15m", max_closed: int = 2) -> Tu
         return [], None
 
 async def get_latest_closed_candles(timeframe: str = "15m", count: int = 2) -> List[Dict[str, Any]]:
+    if config.TRADINGVIEW_FEED_ENABLED:
+        from tradingview_feed import fetch_tradingview
+        closed, _ = await fetch_tradingview(timeframe, max_closed=count)
+        if closed:
+            state.last_feed_source = closed[-1]["source"]
+            return closed
     closed, _ = await fetch_twelve_data(timeframe, max_closed=count)
     if closed:
         state.last_feed_source = closed[-1]["source"]
@@ -224,6 +231,11 @@ async def get_latest_candle(timeframe: str = "15m") -> Optional[Dict[str, Any]]:
     return closed[-1] if closed else None
 
 async def get_forming_candle(timeframe: str = "15m") -> Optional[Dict[str, Any]]:
+    if config.TRADINGVIEW_FEED_ENABLED:
+        from tradingview_feed import fetch_tradingview
+        _, forming = await fetch_tradingview(timeframe)
+        if forming:
+            return forming
     _, forming = await fetch_twelve_data(timeframe)
     if forming:
         return forming
