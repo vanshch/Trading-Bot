@@ -58,6 +58,7 @@ data/*.tmp
 .benchmark_artifacts/
 .stt_cache/
 .codex-*.md
+.chart-artifacts/
 
 # Local handoff and generated deployment artifacts
 HANDOFF_CODEX.md
