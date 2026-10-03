@@ -11,6 +11,30 @@ from alerts import AlertManager
 
 
 class SchedulerChartTests(unittest.IsolatedAsyncioTestCase):
+    async def test_startup_seeds_last_close_without_replaying_alerts(self):
+        state = config.BotState()
+        telegram = AsyncMock()
+        def discard_task(coro):
+            coro.close()
+        with patch.object(config, "state", state), \
+                patch.object(bot.feed, "get_latest_candle", AsyncMock(return_value={"timestamp": "100000"})), \
+                patch.object(bot.asyncio, "create_task", side_effect=discard_task), \
+                patch.object(bot.alert_manager, "check_price_alerts") as evaluate:
+            await bot.post_init(SimpleNamespace(bot=telegram))
+        self.assertEqual(state.last_alerted_candle_time, "15m_100000")
+        evaluate.assert_not_called()
+
+    async def test_startup_without_history_still_starts_scheduler(self):
+        state = config.BotState()
+        def discard_task(coro):
+            coro.close()
+        with patch.object(config, "state", state), \
+                patch.object(bot.feed, "get_latest_candle", AsyncMock(return_value=None)), \
+                patch.object(bot.asyncio, "create_task", side_effect=discard_task) as create:
+            await bot.post_init(SimpleNamespace(bot=AsyncMock()))
+        self.assertEqual(state.last_alerted_candle_time, "")
+        self.assertEqual(create.call_count, 1)
+
     async def test_older_fallback_candle_does_not_replay_price_alert_evaluation(self):
         latest = dict(timestamp="100000", is_green=True, pips=10)
         older = dict(timestamp="99100", is_green=False, pips=-10)
