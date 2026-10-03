@@ -2,6 +2,12 @@
 
 Last updated: 4 October 2026 (IST). Read README.md for architecture/commands; this file records current state and the next action.
 
+## Production rollout preparation — 4 October 2026
+
+- User authorized deploying/enabling both merged PRs for Monday, 5 October. VM inspection confirmed neither feature was present: original Python 3.10 bot and absent screenshots/TradingView modules. Staged latest main with both flags true and the verified Browserless settings, while preserving production state.
+- Dedicated Python 3.12.15 runtime/venv prepared. VM's 34 offline tests and compilation passed. Isolated preflight under unchanged 90 MB high/120 MB max limits returned verified OANDA 15m history, validated Telegram authentication and captured the saved chart; sampled combined RSS peaked at 80.53 MB. No extra Telegram test photo was sent.
+- Startup now seeds the last processed candle from the existing initialization fetch. This prevents a weekend restart from evaluating Friday's close against preserved price alerts; two regression checks cover available/missing startup history. Market-open behavior is still pending real Monday candles.
+
 ## Authorized TradingView feed repository integration
 
 - After the audit, user explicitly requested creating and merging the PR. This supersedes the earlier conditional decision to withhold the merge. Merge does not imply completed OANDA/session qualification or VM deployment.

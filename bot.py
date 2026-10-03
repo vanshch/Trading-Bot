@@ -460,7 +460,11 @@ async def candle_scheduler(app: Application):
             await asyncio.sleep(5)
 
 async def post_init(app: Application):
-    await feed.get_latest_candle(config.state.current_timeframe)
+    tf = config.state.current_timeframe
+    latest = await feed.get_latest_candle(tf)
+    if latest:
+        # Existing history is startup context, not a fresh post-start alert.
+        config.state.last_alerted_candle_time = f"{tf}_{latest['timestamp']}"
     asyncio.create_task(candle_scheduler(app))
     try:
         await app.bot.send_message(

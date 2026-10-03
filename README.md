@@ -168,6 +168,9 @@ Twelve Data offset, converts bar-start timestamps to closed-bar end timestamps,
 and excludes forming bars from closed history. The scheduler suppresses equal
 or older candles when a provider replays history or fallback returns older data.
 OANDA session starts are preserved rather than forced to UTC epoch boundaries.
+At startup, the latest available closed candle seeds the scheduler's processed
+timestamp, so restarting the service does not replay an old close against saved
+alerts. Subsequent new closes continue through normal alert evaluation.
 
 The [BTC audit](docs/tradingview-feed-audit-20261004.md) found 39/39 successful
 history requests over approximately seven hours, all 35 due closes matching
