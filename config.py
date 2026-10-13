@@ -27,7 +27,8 @@ DEFAULT_TIMEFRAME = os.getenv("DEFAULT_TIMEFRAME", "15m").strip().lower()
 OANDA_PRICE_OFFSET = float(os.getenv("OANDA_PRICE_OFFSET", "-0.50"))
 TRADINGVIEW_FEED_ENABLED = os.getenv("TRADINGVIEW_FEED_ENABLED", "false").strip().lower() in ("true", "1", "yes")
 
-# Optional chart enrichment. Credentials stay in .env; off until device testing passes.
+# Optional automatic chart enrichment; explicit screenshot commands use credentials
+# independently of this flag. Credentials stay in .env.
 CHART_SCREENSHOTS_ENABLED = os.getenv("CHART_SCREENSHOTS_ENABLED", "false").lower() in ("true", "1", "yes")
 BROWSERLESS_API_TOKEN = os.getenv("BROWSERLESS_API_TOKEN", "").strip()
 BROWSERLESS_ENDPOINT = os.getenv("BROWSERLESS_ENDPOINT", "https://production-sfo.browserless.io").strip()
