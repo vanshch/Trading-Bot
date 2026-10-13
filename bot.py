@@ -16,6 +16,7 @@ import config
 from config import logger
 import feed
 from screenshots import send_alert_chart
+from manual_charts import request_chart
 from alerts import alert_manager
 
 def authorized_only(func: Callable) -> Callable:
@@ -35,6 +36,8 @@ def get_keyboard() -> InlineKeyboardMarkup:
 
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 Live & Closed Bar", callback_data="btn_latest")],
+        [InlineKeyboardButton("📸 Screenshot Now", callback_data="btn_screenshot"),
+         InlineKeyboardButton("🕐 1H Chart + Volume", callback_data="btn_hourly_chart")],
         [
             InlineKeyboardButton(f"🟢🟢 2-Green: {two_green}", callback_data="btn_two_green"),
             InlineKeyboardButton(f"🔴🔴 2-Red: {two_red}", callback_data="btn_two_red"),
@@ -67,6 +70,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/alerts` — List and manage pending price alerts\n"
         "• `/clearalerts` — Remove all pending price alerts\n"
         "• `/candle` — View live forming bar and last closed bar\n"
+        "• `/screenshot` — Capture the TradingView screenshot now\n"
+        "• `/chart1h` — Latest 20 hourly candles with tick volume\n"
         "• `/status` — View current bot and alert settings"
     )
     if update.message:
@@ -264,6 +269,16 @@ def build_status_text() -> str:
     )
 
 @authorized_only
+async def screenshot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await request_chart(context, "screenshot", config.state.current_timeframe)
+
+
+@authorized_only
+async def hourly_chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await request_chart(context, "hourly", "1h")
+
+
+@authorized_only
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not query:
@@ -272,7 +287,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
 
-    if data == "btn_latest":
+    if data == "btn_screenshot":
+        await request_chart(context, "screenshot", config.state.current_timeframe)
+
+    elif data == "btn_hourly_chart":
+        await request_chart(context, "hourly", "1h")
+
+    elif data == "btn_latest":
         text = await build_candle_view()
         await query.edit_message_text(text=text, reply_markup=get_keyboard(), parse_mode="Markdown")
 
@@ -492,6 +513,8 @@ def main():
     app.add_handler(CommandHandler("clearalerts", clear_alerts_command))
     app.add_handler(CommandHandler("candle", candle_command))
     app.add_handler(CommandHandler("status", status_command))
+    app.add_handler(CommandHandler("screenshot", screenshot_command))
+    app.add_handler(CommandHandler("chart1h", hourly_chart_command))
     app.add_handler(CallbackQueryHandler(button_callback))
 
     app.run_polling(drop_pending_updates=True)

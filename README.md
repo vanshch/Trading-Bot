@@ -1,5 +1,17 @@
 # XAU/USD Candle Close & Momentum Telegram Bot
 
+Current production (8 October 2026): merged PRs #1/#2 and the startup replay guard
+are deployed and enabled on `trade-bot-vm`. The service runs Python 3.12.15,
+uses verified TradingView OANDA history first, falls back to Twelve Data/Yahoo,
+and sends one Browserless chart after triggered alert text. Existing alert state
+is preserved. The requested pause ended on **5 October, 03:30:01 IST**;
+read-only verification on 8 October found the service running and four expected
+alerts matching OANDA candle history. Polling errors and memory pressure remain
+operational follow-ups; see the dated audit in `progress.md`.
+Read `progress.md` for exact deployed commit, evidence, runtime override and rollback.
+The primary local checkout retains older/uncommitted work; the latest merged code
+is in `C:/Users/Lenovo/.codex/worktrees/tradingview-oanda-feed/bot_agy` and GitHub main.
+
 A high-performance real-time Telegram bot designed to monitor Gold spot market data (`XAU/USD`) and deliver instant market momentum alerts, candle close notifications, dynamic price level tracking, and interactive status controls.
 
 ---
@@ -8,9 +20,9 @@ A high-performance real-time Telegram bot designed to monitor Gold spot market d
 
 ```
 [Market Data Ingestion]
-   ├── Primary: Twelve Data API (XAU/USD real-time time-series)
-   │     └── Approximate calibration: OANDA Offset (-$0.50)
-   └── Fallback: Yahoo Finance API (GC=F Gold Futures)
+   ├── Primary: TradingView OANDA:XAUUSD (raw OHLC, verified identity)
+   ├── Fallback: Twelve Data API (XAU/USD time-series, approximate -$0.50 offset)
+   └── Final fallback: Yahoo Finance API (GC=F Gold Futures)
           │
           ▼
 [Feed Normalizer & Candle Engine]
@@ -24,9 +36,6 @@ A high-performance real-time Telegram bot designed to monitor Gold spot market d
    ├── Momentum Streaks (2 Consecutive Green / 2 Consecutive Red)
    │     └── Streak Guard & One-Shot: Alerts strictly on sequence formation
    └── Event-Driven Dispatch: Zero spam, alerts only on triggers
-          │
-          ├── Optional Browserless /function capture (remote Chromium)
-          │   └── One OANDA TradingView photo per alerted candle, after text
           │
           ▼
 [Telegram Interactive Bot API]
@@ -70,8 +79,8 @@ A high-performance real-time Telegram bot designed to monitor Gold spot market d
 - **Corrective Calibration (`OANDA_PRICE_OFFSET = -0.50`)**:
   - Configurable via `OANDA_PRICE_OFFSET` in `config.py` / `.env` (default `-0.50`).
   - Automatically applied to Twelve Data's `open`, `high`, `low`, and `close`.
-- **Invariant Pip Deltas & Candle Direction**: Because the offset is applied uniformly to all OHLC fields, candle color (green/red) and pip movements remain mathematically identical.
-- **Approximate Calibration**: The fixed offset does not guarantee parity with OANDA. Twelve Data uses a composite feed and Yahoo fallback uses gold futures. Set levels with that difference in mind.
+  - **100% Invariant Pip Deltas & Candle Direction**: Because the offset is applied uniformly to all OHLC fields, candle color (green/red) and pip movements remain mathematically identical.
+- **Scope**: This approximate offset applies only to Twelve Data fallback, never raw OANDA prices. It does not guarantee parity with OANDA, and Yahoo futures can differ from spot.
 
 ---
 
@@ -88,18 +97,25 @@ A high-performance real-time Telegram bot designed to monitor Gold spot market d
 | `/alerts` | Lists all active price alerts with one-tap cancel buttons |
 | `/clearalerts` | Clears all pending price alerts immediately |
 | `/candle` | Displays the current live forming bar and latest closed bar |
+| `/screenshot` | Captures the saved TradingView layout immediately at the active alert timeframe |
+| `/chart1h` | Renders the latest 20 verified OANDA hourly candles with tick volume |
 | `/status` | Shows system health, uptime, OANDA alignment offset, and data feed status |
 
 ---
 
-## 4. Production Deployment & Runtime Specs
+## 5. Production Deployment & Runtime Specs
 
-The bot runs 24/7 as a managed systemd service on Google Compute Engine.
+The bot normally runs 24/7 as a managed systemd service on Google Compute Engine.
+The user-requested pause ended on **5 October 2026, 03:30:01 IST**; see
+`progress.md` for the verified restart, latest observation and remaining risks. There is no recurring
+market-hours pause in the application yet.
 
 - **Target VM**: `trade-bot-vm` (`us-central1-a`)
 - **Systemd Service**: `xauusd-bot.service`
 - **Deployment Directory**: `/opt/xauusd_telegram_bot`
 - **User**: `bot_deployer`
+- **Runtime**: dedicated Python 3.12.15; `/opt/xauusd_telegram_bot/venv-20261004/bin/python`
+- **Enabled features**: TradingView OANDA primary and Browserless chart enrichment; both production flags are `true`.
 - **Resource Constraints**: `MemoryHigh=90M`, `MemoryMax=120M` (Strict RAM containment)
 - **State Persistence**: `data/alerts.json` (Atomically saved via temporary file replacement)
 
@@ -120,10 +136,12 @@ sudo systemctl restart xauusd-bot.service
 
 ---
 
-## 5. Local Setup & Configuration
+## 6. Local Setup & Configuration
+
+Use the complete merged checkout identified above until this primary folder is reconciled; its older local source lacks the merged optional modules and checks.
 
 ### Prerequisites
-- Python 3.10+
+- Python 3.10+ for base operation; Python 3.11+ for optional TradingView/tvkit (production: 3.12.15).
 - Telegram Bot Token (from `@BotFather`)
 - Twelve Data API Key
 
@@ -150,7 +168,7 @@ LOG_LEVEL=INFO
 python bot.py
 ```
 
-## Optional TradingView OANDA feed
+## 7. Optional TradingView OANDA feed
 
 `TRADINGVIEW_FEED_ENABLED=false` is the default. Enabling it tries anonymous
 `OANDA:XAUUSD` history through `tvkit==0.18.0` before Twelve Data and Yahoo.
@@ -175,29 +193,26 @@ alerts. Subsequent new closes continue through normal alert evaluation.
 The [BTC audit](docs/tradingview-feed-audit-20261004.md) found 39/39 successful
 history requests over approximately seven hours, all 35 due closes matching
 independent Binance OHLCV, and both recovery suites passing. This qualifies the
-observed BTC polling window; OANDA market-open/session reliability remains
-unmeasured. Repository merge does not deploy or enable the provider on the VM.
-Validate an isolated Python 3.11+ runtime, OANDA sessions and combined bot memory
-before enabling it there. Yahoo fallback remains gold futures, which can differ
+observed BTC polling window; The 8 October retrospective audit verified four expected OANDA alerts;
+a continuously instrumented market-session soak remains outstanding. The merged provider is recorded as deployed and enabled on the VM with Python 3.12.15; see progress for source hashes, memory preflight, the historical production pause and verified resume, and remaining market-open validation. Future runtime/provider changes still require isolated preflight. Yahoo fallback remains gold futures, which can differ
 from spot; the Twelve Data offset is approximate and does not guarantee OANDA parity.
 
 Offline adapter checks: `python -m unittest discover -s tests -p test_tradingview_feed.py`.
 The preserved corrected Linux BTC harness and its eight regression checks are in
 `tools/tradingview_soak/`; see its README for the original procedure and stop state.
 
-## 6. Optional Browserless TradingView screenshots
+## 8. Optional Browserless TradingView screenshots
 
 After a triggered level rejection, false breakout, or fresh two-candle momentum alert,
 the bot sends the existing text immediately. If enabled, it then sends **one shared
 photo per alerted candle**, even when multiple alerts fire. It makes no Browserless
-requests for quiet candles, startup greetings, or command responses. Captures have a
+requests for quiet candles or startup greetings. Explicit `/screenshot` requests also capture charts. Captures have a
 60-second overall deadline and photo delivery a 20-second deadline; failures leave
 the text delivery intact. No retries are made, to bound latency and credit usage.
 
 The bot only uses async HTTP. Chromium runs on Browserless, outside the VM's 120 MB
 service budget. Decoded images are capped at 5 MB and encoded responses at about
-7 MB; live VM memory remains to be
-validated before deployment. Screenshots are OANDA visual context, may contain a
+7 MB; recorded deployment preflight passed combined memory checks under the VM limits (see progress); long gold-session behavior remains unverified. Screenshots are OANDA visual context, may contain a
 forming candle, and can differ from the feed that triggered the alert. They do not
 replace the market-data pipeline. Existing candle deduplication and one-shot settings
 remain in control of triggers.
@@ -217,9 +232,9 @@ so the provider returns bounded base64 JSON and Python decodes it before PNG
 validation. HTTPX request logs are suppressed because Telegram URLs contain bot
 credentials.
 
-### Local device test before merging
+### Explicit local capture/device test
 
-Use the PR worktree and install `requirements.txt` into a Python virtual environment.
+Use the complete merged checkout and install `requirements.txt` into a Python virtual environment.
 Put the existing Telegram credentials and these settings into the ignored `.env`:
 
 ```ini
@@ -243,8 +258,7 @@ python test_chart_delivery.py --timeframe 15m
 python test_chart_delivery.py --send --timeframe 15m
 ```
 
-The one-shot test explicitly enables capture for that invocation, while the normal
-bot remains disabled. Verify on the device that the test text arrives before the
+The one-shot test explicitly enables capture for that invocation, while normal capture follows its environment flag (off by default locally, recorded as enabled in production). Verify on the device that the test text arrives before the
 chart, the saved drawings/indicators render, and the OANDA symbol/timeframe is correct.
 Check the Browserless request log for units billed; the earlier handoff test took
 10.099 seconds and 1 unit, but that does not guarantee a fixed cost per capture.
@@ -252,22 +266,60 @@ For live trigger validation, use a **separate test bot token** and enable
 `CHART_SCREENSHOTS_ENABLED=true` in that test environment. Running a second polling
 process with the production token would compete with the existing VM bot.
 
-### Offline checks and deployment gate
+### Offline checks and recorded integration
 
 ```powershell
-python -m py_compile bot.py alerts.py config.py feed.py screenshots.py test_chart_delivery.py
+python -m py_compile bot.py alerts.py config.py feed.py tradingview_feed.py screenshots.py test_chart_delivery.py
 python -m unittest discover -s tests -p test_alerts.py
 python -m unittest discover -s tests -p test_screenshots.py
 python -m unittest discover -s tests -p test_chart_scheduler.py
+python -m unittest discover -s tests -p test_tradingview_feed.py
 ```
 
 CI runs the active XAU/USD suites on Python 3.10 and 3.12. Historical YouTube files
 remain in GitHub for now; their tests are outside this bot's runtime and CI scope.
-The PR records the existing local XAU/USD implementation in a baseline commit
-because GitHub main previously contained only the YouTube monitor, then adds the
-screenshot feature in a separate commit. Unrelated local deletions and experiments
-are excluded.
+PRs #1/#2/#3 are merged and the recorded production revision is `a2a0400124e6f29b17d8b279dfdb1c6517e3c851`. The merged implementation adds `screenshots.py` and `tradingview_feed.py` to the four original runtime modules; deployments require all six and matching dependencies. Repository defaults remain off; production flags are recorded as on. Deployment preserved private credentials and current alert state. See progress for the requested stop/resume timer, evidence, rollback, and remaining gold-session validation limits. Do not start production or paused experiments as part of documentation maintenance.
 
-Keep the PR draft until device testing passes. Merge and production deployment are
-separate later steps. Any eventual deployment must include `screenshots.py` alongside
-the four original modules and set credentials privately on the VM; never commit `.env`.
+## 9. On-demand screenshots and hourly volume charts
+
+The main control panel includes **📸 Screenshot Now** and **🕐 1H Chart + Volume**.
+`/screenshot` uses the configured Browserless saved layout and active alert timeframe
+(production currently 15m). Capture begins on request; completion still takes the
+provider's rendering time. It requires existing Browserless credentials/profile.
+
+`/chart1h` fetches verified raw `OANDA:XAUUSD` through tvkit at interval `60` and
+renders exactly the latest **20** hourly candles, including the current forming
+bar when returned. It uses a local Pillow PNG renderer with a dark background,
+teal/red candles, wicks, dotted grid, right price scale, latest OHLC/change,
+current-price badge and matching volume bars. Labels use UTC and preserve native
+bar starts; market closures are compressed. **Volume is OANDA tick counts**, not
+exchange-traded contracts. The image is a snapshot, with no saved drawings,
+invented bid/ask prices, TradingView branding or live countdown.
+
+These explicit commands work independently of automatic-alert feature flags.
+The hourly command needs Python 3.11+ and `requirements-tradingview.txt`; there is
+no Twelve Data/Yahoo substitution for this OANDA chart. Short/invalid history or
+provider failures produce an availability message. Pillow (`requirements.txt`)
+keeps rendering small and runs it in a worker thread; no local Chromium is used.
+Captures run as application background tasks so bot commands remain responsive.
+Only one manual request can run at once, with a 30-second cooldown shared by the
+two buttons. Authorization remains limited to `ALLOWED_USER_ID`.
+
+This adds on-demand hourly visualization only. The existing 15m scheduler,
+processed-candle state, alert settings and text-first automatic photos are unchanged.
+
+Offline checks: `python -m unittest discover -s tests -p test_manual_charts.py`.
+Capture a local image and optional candle evidence without polling or Telegram:
+
+```powershell
+$env:TESTING='1' # allows this read-only tool without Telegram credentials
+python tools/preview_hourly_chart.py --data-output .chart-artifacts/hourly-candles.json
+```
+
+Deployments of this feature also require `hourly_chart.py`, `manual_charts.py` and
+the updated dependency manifest. Check `progress.md` for integration/deployment
+status and Linux memory preflight limits before enabling it in production.
+
+## 10. Contributor documentation and closeout
+
+Follow [AGENTS.md](AGENTS.md) for agent/contributor instructions. After substantial work and whenever a PR is merged or closed, review and update affected parts of this README, AGENTS, [skills.md](skills.md), [experience.md](experience.md), and [progress.md](progress.md). Keep architecture/commands here, contributor boundaries in AGENTS, workflow routing in skills, durable lessons in experience, and dated verification/next actions in progress. Distinguish a closed, unmerged PR from shipped work; merging does not itself establish deployment or validation. Worktrees do not synchronize edits automatically: carry the reviewed documentation changes through integration with their code. Historical references are loaded on demand.

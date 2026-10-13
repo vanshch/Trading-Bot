@@ -65,7 +65,8 @@ def normalize_bars(bars, timeframe, max_closed, now):
         pips = round((c - o) * 10, 1)
         candle = dict(open=o, high=h, low=l, close=c, pips=pips,
                       emoji="🟢" if c > o else ("🔴" if c < o else "⚪"),
-                      sign="+" if pips > 0 else "", is_green=c > o, source=SOURCE)
+                      sign="+" if pips > 0 else "", is_green=c > o, source=SOURCE,
+                      volume=volume, start_timestamp=int(ts))
         if ts + interval <= now:
             end = int(ts) + interval
             candle.update(timestamp=str(end), time_str=datetime.fromtimestamp(end, timezone.utc).strftime("%H:%M UTC"))

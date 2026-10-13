@@ -19,11 +19,12 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: pip install -r requirements.txt
-      - run: python -m py_compile bot.py alerts.py config.py feed.py tradingview_feed.py screenshots.py test_chart_delivery.py
+      - run: python -m py_compile bot.py alerts.py config.py feed.py tradingview_feed.py screenshots.py hourly_chart.py manual_charts.py test_chart_delivery.py tools/preview_hourly_chart.py
       - run: python -m unittest discover -s tests -p test_alerts.py
       - run: python -m unittest discover -s tests -p test_screenshots.py
       - run: python -m unittest discover -s tests -p test_chart_scheduler.py
       - run: python -m unittest discover -s tests -p test_tradingview_feed.py
+      - run: python -m unittest discover -s tests -p test_manual_charts.py
   tradingview-dependency:
     runs-on: ubuntu-latest
     env:
