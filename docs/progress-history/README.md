@@ -8,3 +8,4 @@ Earlier primary-checkout snapshots remain in the [primary history index](D:/proj
 | --- | --- |
 | [8 October before alert audit](2026-10-08-203056-908056-before-alert-audit-compaction.md) | Verbatim prior handoff; pause, studies and earlier validation preserved. |
 | [4 October before documentation refresh](2026-10-04-doc-refresh-c873852a-before-refresh.md) | Verbatim former worktree handoff; deployment-pending and running-experiment statements are superseded. |
+| [2026-10-13-045924-889064 before PR #4 deployment closeout](2026-10-13-045924-889064-merged-before-pr4-deployment-closeout.md) | Verbatim prior handoff; merged/deployed status superseded by current progress. |

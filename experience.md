@@ -12,6 +12,7 @@ These are durable lessons for the active candle alert bot. Current architecture 
 - Validate provider identity, ordered timestamps, finite prices, OHLC ranges, and volume before accepting bars. Preserve native session alignment and distinguish bar-start from closed-bar end timestamps.
 - OANDA tick counts and COMEX traded contracts are different units. Correlation/history studies do not establish a trading strategy or authorize a production volume feature.
 - Optional dependencies need isolated runtime checks. Python 3.10 base compatibility does not imply tvkit compatibility; combined feature memory matters under the VM's 90M high/120M max limits.
+- Isolated dependency overlays can preserve existing runtime packages and make rollback a drop-in restoration. Direct maintenance and preflight commands must include the service's PYTHONPATH; importing successfully in a different environment does not qualify production.
 
 ## Evaluate only genuinely new closes
 - Exclude forming candles, seed startup with the latest available completed candle, and suppress equal/older timestamps across replay or fallback. Restarting must not evaluate old history against saved alerts.

@@ -26,7 +26,7 @@
 - **Runtime**: Python 3.10+ base; Python 3.11+ for optional tvkit; async `python-telegram-bot` v20+, `httpx`, and `python-dotenv`. Recorded production runtime is Python 3.12.15.
 - **Production**: GCE `trade-bot-vm`, project `true-ion-434206-f2`, zone `us-central1-a`, `e2-micro`; `xauusd-bot.service` under `bot_deployer` in `/opt/xauusd_telegram_bot`. Memory limits: `MemoryHigh=90M`, `MemoryMax=120M`.
 - **Feature flags**: repository defaults are disabled for TradingView and Browserless screenshots. Consult `progress.md` for deployed revision, enabled flags, user pauses, last verification, and rollback; do not infer current service health from a merge.
-- **Checkout**: the primary folder retains older/uncommitted work. The merged implementation at `a2a0400` is in `C:/Users/Lenovo/.codex/worktrees/tradingview-oanda-feed/bot_agy`. Use complete merged source for feature validation/deployment until reconciliation.
+- **Checkout**: the primary folder retains older/uncommitted work. The merged/deployed runtime at `05527f7` is in `C:/Users/Lenovo/.codex/worktrees/manual-hourly-charts-20261013/bot_agy` and GitHub main. Use complete merged source for validation/deployment until reconciliation; documentation-only main commits do not change deployed runtime hashes.
 
 ## Commands
 
@@ -47,8 +47,8 @@
 
 ### Production Code Deployment
 1. Check current `progress.md`, the complete reviewed revision, rollback evidence, and user authorization; never deploy this older primary source wholesale or override a requested pause.
-2. Validate the active source/tests above. Production source comprises `bot.py`, `alerts.py`, `config.py`, `feed.py`, `tradingview_feed.py`, and `screenshots.py`; install matching dependency manifests in the target runtime. Preserve private `.env` and current `data/alerts.json`.
-   The manual-chart feature adds `hourly_chart.py`, `manual_charts.py` and Pillow; deploy all eight modules together after a combined Linux memory preflight. See progress for its unmerged/undeployed status.
+2. Validate the active source/tests above. Production source comprises `bot.py`, `alerts.py`, `config.py`, `feed.py`, `tradingview_feed.py`, `screenshots.py`, `hourly_chart.py`, and `manual_charts.py`; install matching dependency manifests in the target runtime. Preserve private `.env` and current `data/alerts.json`.
+   Pillow 12.3.0 is deployed through an isolated PYTHONPATH drop-in; direct maintenance/preflight commands need that service environment. Deploy all eight modules together after combined Linux memory checks; consult progress for current revision and rollback.
 3. For this feature, stage all eight source files to `/tmp` with `gcloud compute scp bot.py alerts.py config.py feed.py tradingview_feed.py screenshots.py hourly_chart.py manual_charts.py trade-bot-vm:/tmp/ --project=true-ion-434206-f2 --zone=us-central1-a --quiet`.
 4. Through the encoded remote command mechanism below, back up current code/config/runtime, install staged files into `/opt/xauusd_telegram_bot/`, restore `bot_deployer:bot_deployer` ownership, and restart only when authorized. Runtime/dependency changes require their own preflight, including combined memory.
 5. Verify service state, deployed source hashes, preserved alert settings, recent logs, memory, and restart/OOM counters. Record the actual observation time and limits; an active service alone does not prove market-open alert delivery.

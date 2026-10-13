@@ -1,16 +1,16 @@
 # XAU/USD Candle Close & Momentum Telegram Bot
 
-Current production (8 October 2026): merged PRs #1/#2 and the startup replay guard
-are deployed and enabled on `trade-bot-vm`. The service runs Python 3.12.15,
-uses verified TradingView OANDA history first, falls back to Twelve Data/Yahoo,
-and sends one Browserless chart after triggered alert text. Existing alert state
-is preserved. The requested pause ended on **5 October, 03:30:01 IST**;
-read-only verification on 8 October found the service running and four expected
-alerts matching OANDA candle history. Polling errors and memory pressure remain
-operational follow-ups; see the dated audit in `progress.md`.
+Current production (13 October 2026): PRs #1–#4 are merged and deployed on
+`trade-bot-vm`, including **Screenshot Now** and **1H Chart + Volume** buttons.
+The Python 3.12.15 service uses verified TradingView OANDA history first, falls
+back to Twelve Data/Yahoo, and sends one Browserless chart after triggered text.
+The 15m alert schedule and existing alert state are preserved. Target-runtime
+memory preflight and service/source checks passed; the user is testing manual
+Telegram photo delivery. Polling errors, memory pressure and durable delivery
+retries remain operational follow-ups; see `progress.md`.
 Read `progress.md` for exact deployed commit, evidence, runtime override and rollback.
 The primary local checkout retains older/uncommitted work; the latest merged code
-is in `C:/Users/Lenovo/.codex/worktrees/tradingview-oanda-feed/bot_agy` and GitHub main.
+is in `C:/Users/Lenovo/.codex/worktrees/manual-hourly-charts-20261013/bot_agy` and GitHub main.
 
 A high-performance real-time Telegram bot designed to monitor Gold spot market data (`XAU/USD`) and deliver instant market momentum alerts, candle close notifications, dynamic price level tracking, and interactive status controls.
 
@@ -39,7 +39,7 @@ A high-performance real-time Telegram bot designed to monitor Gold spot market d
           │
           ▼
 [Telegram Interactive Bot API]
-   ├── Command Handlers (/start, /alert, /alerts, /clearalerts, /candle, /status)
+   ├── Command Handlers (/start, /alert, /alerts, /clearalerts, /candle, /status, /screenshot, /chart1h)
    ├── Inline Keyboard GUI (Live inspect, momentum toggles, price alert manager)
    └── Single-User Authorization Gate (ALLOWED_USER_ID)
 ```
@@ -116,6 +116,7 @@ market-hours pause in the application yet.
 - **User**: `bot_deployer`
 - **Runtime**: dedicated Python 3.12.15; `/opt/xauusd_telegram_bot/venv-20261004/bin/python`
 - **Enabled features**: TradingView OANDA primary and Browserless chart enrichment; both production flags are `true`.
+- **Manual chart dependency**: Pillow 12.3.0 in `chart-deps-20261013-044810`, loaded through the systemd `30-chart-deps-20261013.conf` PYTHONPATH drop-in. Direct Python maintenance commands need the same environment.
 - **Resource Constraints**: `MemoryHigh=90M`, `MemoryMax=120M` (Strict RAM containment)
 - **State Persistence**: `data/alerts.json` (Atomically saved via temporary file replacement)
 
@@ -269,16 +270,17 @@ process with the production token would compete with the existing VM bot.
 ### Offline checks and recorded integration
 
 ```powershell
-python -m py_compile bot.py alerts.py config.py feed.py tradingview_feed.py screenshots.py test_chart_delivery.py
+python -m py_compile bot.py alerts.py config.py feed.py tradingview_feed.py screenshots.py hourly_chart.py manual_charts.py test_chart_delivery.py tools/preview_hourly_chart.py
 python -m unittest discover -s tests -p test_alerts.py
 python -m unittest discover -s tests -p test_screenshots.py
 python -m unittest discover -s tests -p test_chart_scheduler.py
 python -m unittest discover -s tests -p test_tradingview_feed.py
+python -m unittest discover -s tests -p test_manual_charts.py
 ```
 
 CI runs the active XAU/USD suites on Python 3.10 and 3.12. Historical YouTube files
 remain in GitHub for now; their tests are outside this bot's runtime and CI scope.
-PRs #1/#2/#3 are merged and the recorded production revision is `a2a0400124e6f29b17d8b279dfdb1c6517e3c851`. The merged implementation adds `screenshots.py` and `tradingview_feed.py` to the four original runtime modules; deployments require all six and matching dependencies. Repository defaults remain off; production flags are recorded as on. Deployment preserved private credentials and current alert state. See progress for the requested stop/resume timer, evidence, rollback, and remaining gold-session validation limits. Do not start production or paused experiments as part of documentation maintenance.
+PRs #1–#4 are merged; deployed source revision is `05527f7857219432074deb5a6377e0b0009322e0`. Deploy all eight runtime modules (`bot`, `alerts`, `config`, `feed`, `screenshots`, `tradingview_feed`, `hourly_chart`, `manual_charts`) and matching dependencies together. Repository automatic-feature defaults remain off; production flags are on. Private credentials and current alert state were preserved. See progress and [13 October deployment](docs/manual-charts-deployment-20261013.md) for actual verification, dependency overlay, rollback, historical pause and remaining manual/device and gold-session limits. Do not start production or paused experiments as part of documentation maintenance.
 
 ## 9. On-demand screenshots and hourly volume charts
 

@@ -1,5 +1,8 @@
 # Manual chart validation — 13 October 2026
 
+This report records pre-deployment implementation checks. PR #4 subsequently
+merged and deployed; see [deployment and current limits](manual-charts-deployment-20261013.md).
+
 Branch `codex/manual-hourly-charts-20261013` is based on deployed/main
 `a2a0400124e6f29b17d8b279dfdb1c6517e3c851`. These results describe local validation,
 not deployment or Telegram device receipt.
@@ -56,8 +59,7 @@ Machine-local ignored evidence is in
 
 ## Integration limits
 
-Unmerged/undeployed at report creation. Deploy eight runtime modules and matching
-requirements together, preserve `.env`/current alerts, and preflight combined
-features on the target runtime/cgroup before an authorized restart. Verify actual
-Telegram receipt, buttons, hashes, preserved settings and memory/OOM counters.
-Paused experiments remain paused; hourly monitoring/volume rules are out of scope.
+PR #4 is now merged/deployed, with target-runtime cgroup preflight, hashes,
+configuration/state preservation and startup verified in the linked deployment
+report. User testing of actual Telegram manual photos remains pending. Paused
+experiments remain paused; hourly monitoring/volume rules are out of scope.
