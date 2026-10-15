@@ -16,7 +16,7 @@ This is a reference map for the current XAU/USD candle alert bot, not an install
 ## Telegram and optional charts
 - `bot.py` owns async commands, callbacks, the single-user gate, scheduler, and text-first dispatch.
 - `screenshots.py` captures Browserless saved-layout charts remotely; one photo per alerted candle, no quiet-candle capture, and bounded failure handling. `test_chart_delivery.py` is an explicit one-shot capture/device-test tool, not a second polling bot.
-- `manual_charts.py` runs explicit screenshot/hourly requests as bounded background tasks with shared busy/cooldown protection. `hourly_chart.py` renders exactly 20 verified raw OANDA hourly candles and tick volume with Pillow, including a labeled forming bar when available. `tools/preview_hourly_chart.py` saves PNG/data evidence without polling or Telegram. Automatic-alert flags do not suppress explicit requests; credentials/optional tvkit remain required.
+- `manual_charts.py` runs explicit screenshot/hourly requests as bounded background tasks with shared busy protection and no timed cooldown. `hourly_chart.py` renders exactly 20 verified raw OANDA hourly candles and tick volume with Pillow, including a labeled forming bar when available. `tools/preview_hourly_chart.py` saves PNG/data evidence without polling or Telegram. Automatic-alert flags do not suppress explicit requests; credentials/optional tvkit remain required.
 - Verify actual parse mode, escaped dynamic text, payload limits, and credential-safe logs. Live device tests consume provider resources and send messages only when explicitly requested.
 
 ## Validation and operations

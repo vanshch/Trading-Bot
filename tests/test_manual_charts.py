@@ -89,18 +89,32 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         return SimpleNamespace(application=application,
                                bot=SimpleNamespace(send_message=AsyncMock(), send_photo=AsyncMock())), pending
 
-    async def test_background_reservation_busy_and_cooldown(self):
+    async def test_background_reservation_blocks_overlapping_requests(self):
         context, pending = self.context()
-        with patch.object(manual.time, 'monotonic', return_value=100):
+        try:
             await manual.request_chart(context, 'hourly', '1h')
             await manual.request_chart(context, 'screenshot', '15m')
             self.assertEqual(len(pending), 1)
             self.assertIn('already', context.bot.send_message.call_args.args[1])
-            pending.pop().close()
-            context.application.bot_data['manual_chart_busy'] = False
-            await manual.request_chart(context, 'screenshot', '15m')
-            self.assertEqual(len(pending), 0)
-            self.assertIn('30 seconds', context.bot.send_message.call_args.args[1])
+        finally:
+            for coro in pending:
+                coro.close()
+
+    async def test_manual_requests_can_repeat_immediately_after_delivery(self):
+        context, pending = self.context()
+        with patch.object(manual, 'capture_chart', AsyncMock(return_value=b'png')) as capture, \
+             patch.object(manual, 'capture_hourly_chart', AsyncMock(return_value=(b'png', 'caption'))) as hourly:
+            try:
+                for kind in ('screenshot', 'screenshot', 'hourly', 'screenshot'):
+                    await manual.request_chart(context, kind, '1h' if kind == 'hourly' else '15m')
+                    self.assertEqual(len(pending), 1)
+                    await pending.pop()
+                self.assertEqual(capture.await_count, 3)
+                hourly.assert_awaited_once()
+                self.assertEqual(context.bot.send_photo.await_count, 4)
+            finally:
+                for coro in pending:
+                    coro.close()
 
     async def test_screenshot_current_timeframe_even_auto_flag_off(self):
         context, _ = self.context()

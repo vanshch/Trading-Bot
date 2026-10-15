@@ -1,6 +1,11 @@
 # Project progress
 
-Updated: 13 October 2026 (IST). [README](README.md) owns architecture/commands; [history](docs/progress-history/README.md) preserves prior handoffs verbatim, read on demand.
+Updated: 16 October 2026 (IST). [README](README.md) owns architecture/commands; [history](docs/progress-history/README.md) preserves prior handoffs verbatim, read on demand.
+
+## Current change
+
+- **16 October, implementation only:** removed the shared 30s manual chart cooldown; requests may repeat as soon as the previous background delivery finishes or fails. One in-flight reservation remains. Checkout `D:/projects/bot_agy-no-chart-delay`, branch `feature/remove-manual-chart-cooldown`, based on main `88226a1`; primary changes preserved. Not deployed; recorded production below still has the cooldown.
+- Offline verification **16 October 03:43 IST**: 50 active tests, compilation and focused Ruff correctness checks passed. Broader inherited Ruff rules report the same eight existing findings on baseline and changed files; both files already fail formatter checks. CodeRabbit CLI 0.9.0 installed in WSL; review awaits user OAuth sign-in. No live provider/Telegram/VM operations performed. Review README/AGENTS/skills/experience completed; only affected behavior guidance changed.
 
 ## Current production state
 
@@ -23,7 +28,7 @@ Updated: 13 October 2026 (IST). [README](README.md) owns architecture/commands; 
 
 ## Next actions, evidence and rollback
 
-- User tests `/start`, **Screenshot Now**, **1H Chart + Volume** (30s between requests). Record device outcomes separately; do not start another production-token poller. Address broader delivery/polling/resource work separately, leaving experiments paused.
+- Complete CodeRabbit review, PR and CI for cooldown removal; deployment/device verification pending. Production device tests still require 30s between requests until deployed. Record device outcomes separately; do not start another production-token poller. Address broader delivery/polling/resource work separately, leaving experiments paused.
 - [Deployment report](docs/manual-charts-deployment-20261013.md); VM `/opt/xauusd_telegram_bot/deployment-20261013.json`; staged evidence `/opt/xauusd-bot-staging-20261013-044810/`; local ignored `.chart-artifacts/deployment-20261013/` in merged worktree. Preserve machine-local evidence independently of Git; no raw logs/secrets in Markdown.
 - Root-private backup `/opt/xauusd-backups/20261013-pr4-044810`; rollback `sudo python3 /opt/xauusd-backups/20261013-pr4-044810/rollback.py`. Restores prior code/manifests/drop-in while retaining **current** alerts/private environment; dependency directory remains unused. Older `/opt/xauusd-backups/20261004-pr1-pr2` remains historical. No rollback performed.
 
