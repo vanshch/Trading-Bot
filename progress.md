@@ -28,7 +28,7 @@ Updated: 16 October 2026 (IST). [README](README.md) owns architecture/commands; 
 
 ## Next actions, evidence and rollback
 
-- Complete CodeRabbit review, PR and CI for cooldown removal; deployment/device verification pending. Production device tests still require 30s between requests until deployed. Record device outcomes separately; do not start another production-token poller. Address broader delivery/polling/resource work separately, leaving experiments paused.
+- CodeRabbit OAuth attempt timed out; callback closed and prior URL expired. User must run `wsl.exe --exec /home/vanshch/.local/bin/coderabbit auth login` interactively, then complete review/PR integration. CI passed documentation head `1d981bd` ([38816031206](https://github.com/vanshch/Trading-Bot/actions/runs/38816031206)); later commits need CI. Deployment/device verification pending; production still requires 30s between requests until deployed. Do not start another production-token poller; leave experiments paused.
 - [Deployment report](docs/manual-charts-deployment-20261013.md); VM `/opt/xauusd_telegram_bot/deployment-20261013.json`; staged evidence `/opt/xauusd-bot-staging-20261013-044810/`; local ignored `.chart-artifacts/deployment-20261013/` in merged worktree. Preserve machine-local evidence independently of Git; no raw logs/secrets in Markdown.
 - Root-private backup `/opt/xauusd-backups/20261013-pr4-044810`; rollback `sudo python3 /opt/xauusd-backups/20261013-pr4-044810/rollback.py`. Restores prior code/manifests/drop-in while retaining **current** alerts/private environment; dependency directory remains unused. Older `/opt/xauusd-backups/20261004-pr1-pr2` remains historical. No rollback performed.
 

@@ -19,7 +19,10 @@ both Python 3.10/3.12 offline jobs and optional-provider/harness checks; observe
 CodeRabbit CLI 0.9.0 is installed under WSL. The attempted agent review of the
 remote feature branch stopped at OAuth sign-in without producing findings.
 [Authentication diagnostic](manual-chart-cooldown-auth-status-20261016.txt).
-The original sign-in session remains pending for the user. GitHub CodeRabbit
+The original sign-in attempt timed out; its localhost callback is closed and its
+URL must not be reused. Run interactively in a user-controlled terminal:
+`wsl.exe --exec /home/vanshch/.local/bin/coderabbit auth login`.
+GitHub CodeRabbit
 reported “Review skipped: draft pull request”; that is not a completed review.
 Keep the PR draft and unmerged until authentication/review completes. No AI review
 result is claimed.
