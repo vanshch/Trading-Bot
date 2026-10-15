@@ -10,4 +10,16 @@ Base: `88226a1` (main). Local verification: 16 October 2026, 03:43 IST.
 - Inherited broader Ruff configuration reports eight existing findings, identical to baseline. Formatter checks already fail on both baseline files; formatting changes were kept outside this behavioral fix.
 - README, AGENTS, skills, experience and progress reviewed; affected guidance updated. No provider calls, Telegram messages, production restart or deployment performed.
 
-CodeRabbit CLI 0.9.0 is installed under WSL. Review requires user OAuth sign-in; no AI review result is claimed until the authenticated review finishes.
+Implementation commit: `21e36a1e61914bfc3ff518afae6349df1e8a2371`.
+[Draft PR #5](https://github.com/vanshch/Trading-Bot/pull/5).
+[CI 38815878411](https://github.com/vanshch/Trading-Bot/actions/runs/38815878411) passed
+both Python 3.10/3.12 offline jobs and optional-provider/harness checks; observed
+16 October 2026, 03:46 IST. Subsequent documentation commits need their own CI result.
+
+CodeRabbit CLI 0.9.0 is installed under WSL. The attempted agent review of the
+remote feature branch stopped at OAuth sign-in without producing findings.
+[Authentication diagnostic](manual-chart-cooldown-auth-status-20261016.txt).
+The original sign-in session remains pending for the user. GitHub CodeRabbit
+reported “Review skipped: draft pull request”; that is not a completed review.
+Keep the PR draft and unmerged until authentication/review completes. No AI review
+result is claimed.
