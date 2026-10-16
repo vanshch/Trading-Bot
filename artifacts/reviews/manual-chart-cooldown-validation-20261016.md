@@ -11,18 +11,26 @@ Base: `88226a1` (main). Local verification: 16 October 2026, 03:43 IST.
 - README, AGENTS, skills, experience and progress reviewed; affected guidance updated. No provider calls, Telegram messages, production restart or deployment performed.
 
 Implementation commit: `21e36a1e61914bfc3ff518afae6349df1e8a2371`.
-[Draft PR #5](https://github.com/vanshch/Trading-Bot/pull/5).
+[PR #5](https://github.com/vanshch/Trading-Bot/pull/5).
 [CI 38815878411](https://github.com/vanshch/Trading-Bot/actions/runs/38815878411) passed
 both Python 3.10/3.12 offline jobs and optional-provider/harness checks; observed
 16 October 2026, 03:46 IST. Subsequent documentation commits need their own CI result.
 
-CodeRabbit CLI 0.9.0 is installed under WSL. The attempted agent review of the
-remote feature branch stopped at OAuth sign-in without producing findings.
-[Authentication diagnostic](manual-chart-cooldown-auth-status-20261016.txt).
-The original sign-in attempt timed out; its localhost callback is closed and its
-URL must not be reused. Run interactively in a user-controlled terminal:
-`wsl.exe --exec /home/vanshch/.local/bin/coderabbit auth login`.
-GitHub CodeRabbit
-reported “Review skipped: draft pull request”; that is not a completed review.
-Keep the PR draft and unmerged until authentication/review completes. No AI review
-result is claimed.
+After successful user OAuth authentication, CodeRabbit CLI **0.9.0** completed
+one authenticated remote review with **zero findings**, observed 16 October 2026,
+**15:04 IST**. Reviewed head `38749710cd9ea170805558cd51e79c02d6287c7a`
+against main `88226a14d1c9be87732a9652438a53cd4b1fc8e1`. Runtime/test changes
+have not changed since that review; subsequent edits reconcile documentation and
+preserve this evidence. [Generated agent report](manual-chart-cooldown-coderabbit-20261016.ndjson).
+
+Command (run from WSL `/tmp` to avoid Windows worktree Git path translation):
+`coderabbit review --agent --remote vanshch/Trading-Bot --base main --source-branch feature/remove-manual-chart-cooldown`.
+
+[CI 38816370798](https://github.com/vanshch/Trading-Bot/actions/runs/38816370798)
+also passed all three jobs on reviewed head `3874971`. Final merge requires CI
+on the final documentation/evidence head. The linked PR retains CI and integration
+status. No deployment is part of this change.
+
+Historical only: the first OAuth attempt timed out, and GitHub initially skipped
+the draft PR. [Pre-login authentication diagnostic](manual-chart-cooldown-auth-status-20261016.txt)
+is preserved; neither is a current review blocker.

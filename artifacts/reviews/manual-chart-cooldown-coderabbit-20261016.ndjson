@@ -1,0 +1,2 @@
+{"type":"review_context","reviewType":"all","currentBranch":"feature/remove-manual-chart-cooldown","baseBranch":"main","remote":"vanshch/Trading-Bot","expectedDuration":"Reviews usually take 2-6 minutes and can take up to 15. Keep this command running for at least 15 minutes or run it in the background; stopping it early discards the review."}
+{"type":"complete","status":"review_completed","findings":0,"outcome":"completed","message":"Review completed"}

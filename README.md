@@ -9,8 +9,9 @@ memory preflight and service/source checks passed; the user is testing manual
 Telegram photo delivery. Polling errors, memory pressure and durable delivery
 retries remain operational follow-ups; see `progress.md`.
 Read `progress.md` for exact deployed commit, evidence, runtime override and rollback.
-The primary local checkout retains older/uncommitted work; the latest merged code
-is in `C:/Users/Lenovo/.codex/worktrees/manual-hourly-charts-20261013/bot_agy` and GitHub main.
+The primary local checkout retains older/uncommitted work; GitHub main is the
+authoritative merged source. See progress for a complete local checkout and changes
+that have not been deployed.
 
 A high-performance real-time Telegram bot designed to monitor Gold spot market data (`XAU/USD`) and deliver instant market momentum alerts, candle close notifications, dynamic price level tracking, and interactive status controls.
 

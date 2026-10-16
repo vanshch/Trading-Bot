@@ -26,7 +26,7 @@
 - **Runtime**: Python 3.10+ base; Python 3.11+ for optional tvkit; async `python-telegram-bot` v20+, `httpx`, and `python-dotenv`. Recorded production runtime is Python 3.12.15.
 - **Production**: GCE `trade-bot-vm`, project `true-ion-434206-f2`, zone `us-central1-a`, `e2-micro`; `xauusd-bot.service` under `bot_deployer` in `/opt/xauusd_telegram_bot`. Memory limits: `MemoryHigh=90M`, `MemoryMax=120M`.
 - **Feature flags**: repository defaults are disabled for TradingView and Browserless screenshots. Consult `progress.md` for deployed revision, enabled flags, user pauses, last verification, and rollback; do not infer current service health from a merge.
-- **Checkout**: the primary folder retains older/uncommitted work. The merged/deployed runtime at `05527f7` is in `C:/Users/Lenovo/.codex/worktrees/manual-hourly-charts-20261013/bot_agy` and GitHub main. Use complete merged source for validation/deployment until reconciliation; documentation-only main commits do not change deployed runtime hashes.
+- **Checkout**: the primary folder retains older/uncommitted work. GitHub main is authoritative; consult progress for a complete local checkout and exact deployed revision. Use complete reviewed source for validation/deployment until reconciliation; main can contain undeployed changes, and documentation-only commits do not change runtime hashes.
 
 ## Commands
 
