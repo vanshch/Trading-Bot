@@ -27,9 +27,15 @@ Command (run from WSL `/tmp` to avoid Windows worktree Git path translation):
 `coderabbit review --agent --remote vanshch/Trading-Bot --base main --source-branch feature/remove-manual-chart-cooldown`.
 
 [CI 38816370798](https://github.com/vanshch/Trading-Bot/actions/runs/38816370798)
-also passed all three jobs on reviewed head `3874971`. Final merge requires CI
-on the final documentation/evidence head. The linked PR retains CI and integration
-status. No deployment is part of this change.
+also passed all three jobs on reviewed head `3874971`.
+[Final CI 38881513484](https://github.com/vanshch/Trading-Bot/actions/runs/38881513484)
+passed all three jobs on final head `9d69a6056341cdebee54c338ac1c97f8a4794cb8`.
+The GitHub CodeRabbit check skipped OSS review; the authenticated CLI result above
+is the substantive review. PR #5 merged **16 October 2026, 09:37:32 UTC / 15:07:32 IST**
+as `9b730d0f9f576cf1c9db1e1b562d48ff945df591`. Feature branches were deleted;
+the complete worktree was synchronized to the merged source. No deployment is part
+of this change. README/AGENTS/skills/experience/progress reviewed at closeout;
+only operational evidence needed further edits.
 
 Historical only: the first OAuth attempt timed out, and GitHub initially skipped
 the draft PR. [Pre-login authentication diagnostic](manual-chart-cooldown-auth-status-20261016.txt)
