@@ -9,8 +9,9 @@ memory preflight and service/source checks passed; the user is testing manual
 Telegram photo delivery. Polling errors, memory pressure and durable delivery
 retries remain operational follow-ups; see `progress.md`.
 Read `progress.md` for exact deployed commit, evidence, runtime override and rollback.
-The primary local checkout retains older/uncommitted work; the latest merged code
-is in `C:/Users/Lenovo/.codex/worktrees/manual-hourly-charts-20261013/bot_agy` and GitHub main.
+The primary local checkout retains older/uncommitted work; GitHub main is the
+authoritative merged source. See progress for a complete local checkout and changes
+that have not been deployed.
 
 A high-performance real-time Telegram bot designed to monitor Gold spot market data (`XAU/USD`) and deliver instant market momentum alerts, candle close notifications, dynamic price level tracking, and interactive status controls.
 
@@ -304,8 +305,9 @@ no Twelve Data/Yahoo substitution for this OANDA chart. Short/invalid history or
 provider failures produce an availability message. Pillow (`requirements.txt`)
 keeps rendering small and runs it in a worker thread; no local Chromium is used.
 Captures run as application background tasks so bot commands remain responsive.
-Only one manual request can run at once, with a 30-second cooldown shared by the
-two buttons. Authorization remains limited to `ALLOWED_USER_ID`.
+Only one manual request can run at once. Another request can start immediately
+after delivery or failure, with no timed cooldown between either button or command.
+Authorization remains limited to `ALLOWED_USER_ID`. See progress for deployment status.
 
 This adds on-demand hourly visualization only. The existing 15m scheduler,
 processed-candle state, alert settings and text-first automatic photos are unchanged.

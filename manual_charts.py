@@ -1,6 +1,5 @@
 """Bounded, user-requested photos independent of automatic alert settings."""
 import asyncio
-import time
 from datetime import datetime, timezone
 from io import BytesIO
 
@@ -9,21 +8,14 @@ from config import logger
 from hourly_chart import capture_hourly_chart
 from screenshots import capture_chart, configured_settings, CAPTURE_TIMEOUT
 
-COOLDOWN_SECONDS = 30
-
 
 async def request_chart(context, kind, timeframe):
     """Reserve before task creation so repeated taps never queue captures."""
     state = context.application.bot_data
-    now = time.monotonic()
     if state.get('manual_chart_busy'):
         await context.bot.send_message(config.ALLOWED_USER_ID, 'A chart is already being prepared. Please wait.')
         return
-    if now < state.get('manual_chart_next', 0):
-        await context.bot.send_message(config.ALLOWED_USER_ID, 'Please wait 30 seconds between chart requests.')
-        return
     state['manual_chart_busy'] = True
-    state['manual_chart_next'] = now + COOLDOWN_SECONDS
     try:
         await context.bot.send_message(config.ALLOWED_USER_ID,
                                        'Preparing the 1H chart…' if kind == 'hourly' else 'Capturing the screenshot now…')

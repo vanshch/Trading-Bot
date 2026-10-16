@@ -1,6 +1,11 @@
 # Project progress
 
-Updated: 13 October 2026 (IST). [README](README.md) owns architecture/commands; [history](docs/progress-history/README.md) preserves prior handoffs verbatim, read on demand.
+Updated: 16 October 2026 (IST). [README](README.md) owns architecture/commands; [history](docs/progress-history/README.md) preserves prior handoffs verbatim, read on demand.
+
+## Current repository change
+
+- **16 October, [PR #5](https://github.com/vanshch/Trading-Bot/pull/5):** removes the shared 30s manual chart cooldown; requests may repeat after the previous background delivery finishes or fails. One in-flight reservation remains. Implementation `21e36a1`, based on main `88226a1`; checkout `D:/projects/bot_agy-no-chart-delay`. Primary changes preserved. Not deployed; recorded production below still has the cooldown.
+- Offline verification **16 October 03:43 IST**: 50 active tests, compilation and focused Ruff correctness checks passed. Broader inherited Ruff rules report eight existing findings; both files already fail formatter checks. CI passed Python 3.10/3.12 and optional-provider checks on `3874971` ([38816370798](https://github.com/vanshch/Trading-Bot/actions/runs/38816370798)); subsequent documentation/evidence commits require final CI. CodeRabbit CLI **0.9.0** remote review completed with **zero findings**, observed **15:04 IST**, reviewed head `3874971`. [Review/validation](artifacts/reviews/manual-chart-cooldown-validation-20261016.md). README/AGENTS/skills/experience reviewed; affected guidance changed. No live provider/Telegram/VM operations performed.
 
 ## Current production state
 
@@ -10,7 +15,7 @@ Updated: 13 October 2026 (IST). [README](README.md) owns architecture/commands; 
 - Production automatic flags `TRADINGVIEW_FEED_ENABLED=true`, `CHART_SCREENSHOTS_ENABLED=true`; scheduler **15m**. Manual `/screenshot` and `/chart1h`/buttons are available, independent of automatic flags; shared 30s cooldown and one in-flight capture. H1 is on demand only, exactly 20 native OANDA bars with labeled forming candle/tick volume.
 - `.env` and `data/alerts.json` unchanged at cutover/health verification. Resistance **#3 $4,318.00** active, both momentum settings off, next ID **9**. State SHA256 and backup details in [deployment evidence](docs/manual-charts-deployment-20261013.md).
 - Service memory at health check **82,190,336 bytes**, peak **82,739,200 bytes**; `MemoryHigh=90M`, `MemoryMax=120M`; **high/max/oom/oom_kill=0** in new cgroup. This is startup observation, not sustained load qualification.
-- Authoritative merged source: `C:/Users/Lenovo/.codex/worktrees/manual-hourly-charts-20261013/bot_agy` and GitHub main. Primary `D:/projects/bot_agy` retains older/uncommitted source; do not deploy it wholesale. Current docs are integrated into main; preserve unrelated primary changes.
+- Authoritative merged source is GitHub main. Complete checkout `D:/projects/bot_agy-no-chart-delay` contains the cooldown change; use the reviewed main release after PR #5 integration. The formerly recorded `C:/Users/Lenovo/.codex/worktrees/manual-hourly-charts-20261013/bot_agy` is absent. Primary `D:/projects/bot_agy` retains older/uncommitted source; preserve it and do not deploy it wholesale.
 
 ## Validation and unresolved risks
 
@@ -23,7 +28,7 @@ Updated: 13 October 2026 (IST). [README](README.md) owns architecture/commands; 
 
 ## Next actions, evidence and rollback
 
-- User tests `/start`, **Screenshot Now**, **1H Chart + Volume** (30s between requests). Record device outcomes separately; do not start another production-token poller. Address broader delivery/polling/resource work separately, leaving experiments paused.
+- Deploy the reviewed main release only within authorized deployment work, then verify repeated manual requests on Telegram. Until deployed, production still requires 30s between requests. No runtime verification since the production observation above. Do not start another production-token poller; leave experiments paused. PR #5 is the integration/CI evidence link; merging alone does not deploy it.
 - [Deployment report](docs/manual-charts-deployment-20261013.md); VM `/opt/xauusd_telegram_bot/deployment-20261013.json`; staged evidence `/opt/xauusd-bot-staging-20261013-044810/`; local ignored `.chart-artifacts/deployment-20261013/` in merged worktree. Preserve machine-local evidence independently of Git; no raw logs/secrets in Markdown.
 - Root-private backup `/opt/xauusd-backups/20261013-pr4-044810`; rollback `sudo python3 /opt/xauusd-backups/20261013-pr4-044810/rollback.py`. Restores prior code/manifests/drop-in while retaining **current** alerts/private environment; dependency directory remains unused. Older `/opt/xauusd-backups/20261004-pr1-pr2` remains historical. No rollback performed.
 
