@@ -38,5 +38,6 @@ of this change. README/AGENTS/skills/experience/progress reviewed at closeout;
 only operational evidence needed further edits.
 
 Historical only: the first OAuth attempt timed out, and GitHub initially skipped
-the draft PR. [Pre-login authentication diagnostic](manual-chart-cooldown-auth-status-20261016.txt)
-is preserved; neither is a current review blocker.
+the draft PR. The [pre-login authentication diagnostic](https://github.com/vanshch/Trading-Bot/blob/7c50d4bf2573659d90568cbb3dc617a6d849e7b4/artifacts/reviews/manual-chart-cooldown-auth-status-20261016.txt)
+is preserved in Git history; its transient local copy is now untracked. Neither
+historical event is a current review blocker.

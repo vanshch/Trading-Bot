@@ -7,6 +7,7 @@ These are durable lessons for the active candle alert bot. Current architecture 
 - Worktrees share Git history but have independent files. Check the branch/revision and dirty state before edits or deployment; preserve local-only changes and transfer reviewed changes through Git rather than copying old source onto newer code.
 - A detached HEAD can be the only complete checkout. Verify source completeness, ancestry and active references before cleanup. Bundle all refs and preserve private local files separately; Git bundles do not contain uncommitted state or ignored evidence. Preserve divergent same-named history snapshots under distinct paths.
 - Missing packages and OS-specific harness imports are different failures. Use the matching virtual environment for `telegram`, and Linux/WSL for the soak harness's `resource` dependency; do not infer a runtime path defect from unrelated tool failures.
+- Untracking leaves files on disk. Verify the remaining application from a tracked-only export, preserve local bytes/private state, and use exact ignore entries to prevent accidental re-addition without blocking unrelated future source files.
 - Read the current handoff before operational decisions. Historical successes cannot override a later user stop/pause, and editing documentation does not verify a timer's future execution.
 
 ## Treat market feeds as different contracts

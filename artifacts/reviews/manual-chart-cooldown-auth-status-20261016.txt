@@ -1,7 +1,0 @@
-────────────────────────────────────────
-CodeRabbit Auth
-
-User info
-Status       : signed out
-Next step    : coderabbit auth login
-────────────────────────────────────────

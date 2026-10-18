@@ -32,17 +32,18 @@
 - Run `git status --short --branch`, `git worktree list`, and `git log -1 --oneline` before editing. Use a dedicated feature branch/worktree based on reviewed main; never edit a dirty base branch or remove a worktree only because HEAD is detached.
 - Before cleanup, preserve staged/unstaged changes, untracked files, private ignored state/evidence and all Git refs in a verified private recovery location outside the repository. Exclude reproducible virtual environments/caches; record exclusions. Never upload recovery copies or raw private logs.
 - Recheck ancestry and active worktree references immediately before local branch removal. Preserve unique history and unrelated deletion intent. Remote branch deletion is a separate action.
+- Retired YouTube code/tests/plans and obsolete deployment recipes are ignored local history, removed from the tracked tree after `7c50d4b`. Preserve local copies and do not re-add them implicitly. Keep explicit ignore entries scoped to the retired paths; remove the relevant entry deliberately if replacing a retired path with new active code. Validate untracking with a tracked-only export so ignored source cannot hide a missing dependency.
 - Use the selected interpreter with `python -m pip`; install matching requirements before offline tests. Missing `telegram` is a dependency/interpreter problem. `tools/tradingview_soak` uses Linux's `resource` module and runs on Linux/WSL; it is not a Windows runtime requirement. Keep `/opt/...` paths in Linux operations, not Python import paths. Diagnose actual errors before adding platform workarounds.
 
 ## Commands
 
-### Local Execution & Testing (complete merged checkout)
+### Local Execution & Testing
 - Install base dependencies: `python -m pip install -r requirements.txt`.
 - For TradingView, use Python 3.11+ and `python -m pip install -r requirements-tradingview.txt`.
 - Run locally: `python bot.py`. Do not start a second poller using the production token.
 - Syntax check: `python -m py_compile bot.py alerts.py config.py feed.py tradingview_feed.py screenshots.py hourly_chart.py manual_charts.py test_chart_delivery.py tools/preview_hourly_chart.py`.
 - Active offline suites: run `python -m unittest discover -s tests -p <pattern>` for `test_alerts.py`, `test_screenshots.py`, `test_chart_scheduler.py`, `test_tradingview_feed.py`, and `test_manual_charts.py`. Linux harness checks: `python -m unittest discover -s tools/tradingview_soak -p test_soak.py`.
-- Match checks to the change. Documentation-only edits require factual/link/diff checks and the progress caps, not provider requests or Telegram sends. Legacy YouTube tests are outside the active bot's CI scope.
+- Match checks to the change. Documentation-only edits require factual/link/diff checks and the progress caps, not provider requests or Telegram sends. Legacy YouTube tests are not tracked or part of CI; ignored local copies may still exist, so use the named patterns above.
 
 ### Production VM Management
 - Check status: `systemctl status xauusd-bot.service`.
