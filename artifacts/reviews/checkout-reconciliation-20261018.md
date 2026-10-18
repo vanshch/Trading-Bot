@@ -93,3 +93,10 @@ Later edits only record review/cleanup/integration evidence; runtime/tests are u
 
 Review command (WSL `/tmp`, avoiding Windows Git worktree path translation):
 `coderabbit review --agent --remote vanshch/Trading-Bot --base main --source-branch feature/reconcile-primary-checkout`.
+
+Integration: [PR #7](https://github.com/vanshch/Trading-Bot/pull/7). Its
+[checks](https://github.com/vanshch/Trading-Bot/pull/7/checks) and merge record
+are the authoritative final integration evidence. Integration requires passing
+CI on the final head; it does not deploy code. Local reconciliation actions above
+were completed independently of the documentation merge. Temporary review
+worktree/branch cleanup follows integration; original unique legacy branches stay.
