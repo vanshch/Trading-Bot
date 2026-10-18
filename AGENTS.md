@@ -37,13 +37,13 @@
 
 ## Commands
 
-### Local Execution & Testing (complete merged checkout)
+### Local Execution & Testing
 - Install base dependencies: `python -m pip install -r requirements.txt`.
 - For TradingView, use Python 3.11+ and `python -m pip install -r requirements-tradingview.txt`.
 - Run locally: `python bot.py`. Do not start a second poller using the production token.
 - Syntax check: `python -m py_compile bot.py alerts.py config.py feed.py tradingview_feed.py screenshots.py hourly_chart.py manual_charts.py test_chart_delivery.py tools/preview_hourly_chart.py`.
 - Active offline suites: run `python -m unittest discover -s tests -p <pattern>` for `test_alerts.py`, `test_screenshots.py`, `test_chart_scheduler.py`, `test_tradingview_feed.py`, and `test_manual_charts.py`. Linux harness checks: `python -m unittest discover -s tools/tradingview_soak -p test_soak.py`.
-- Match checks to the change. Documentation-only edits require factual/link/diff checks and the progress caps, not provider requests or Telegram sends. Legacy YouTube tests are outside the active bot's CI scope.
+- Match checks to the change. Documentation-only edits require factual/link/diff checks and the progress caps, not provider requests or Telegram sends. Legacy YouTube tests are not tracked or part of CI; ignored local copies may still exist, so use the named patterns above.
 
 ### Production VM Management
 - Check status: `systemctl status xauusd-bot.service`.

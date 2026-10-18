@@ -1,8 +1,10 @@
 # Retired-file tracking cleanup — 18 October 2026
 
 Base: `7c50d4bf2573659d90568cbb3dc617a6d849e7b4`.
-Branch: `chore/untrack-legacy-youtube`. Local commit only; no push, PR, deployment,
-live provider calls, Telegram sends or experiment restarts are part of this change.
+Branch: `chore/untrack-legacy-youtube`; initially committed locally as `ed31da5`.
+The user subsequently authorized publication and documentation alignment.
+Integration/CI status is recorded below. No deployment, live provider calls,
+Telegram sends or experiment restarts are part of this change.
 
 ## Scope and preservation
 
@@ -50,6 +52,8 @@ verified by SHA256. Subsequent changes only record this review/evidence.
 Command (WSL, primary Git directory):
 `coderabbit review --agent --committed --base main`.
 
-README, AGENTS, skills, experience and progress reviewed together. This local
-commit has not been pushed or merged; no new CI or production verification is
-claimed. The earlier PR #7 integration remains unchanged.
+README, AGENTS, skills, experience and progress reviewed together. Subsequent
+documentation alignment describes the tracked GitHub tree, correct setup/defaults,
+current no-cooldown source and separately dated production observations. Earlier
+local validation is unchanged; final CI/integration is owned by the publication
+PR and does not constitute a production check.

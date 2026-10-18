@@ -3,7 +3,7 @@
 This is a reference map for the current XAU/USD candle alert bot, not an installed Codex skill. Read [README.md](README.md) for architecture/setup, [AGENTS.md](AGENTS.md) for contributor rules, [experience.md](experience.md) for durable lessons, and [progress.md](progress.md) for dated deployment state and validation limits. Update affected guidance at substantial milestones and PR closeout as required by AGENTS.
 
 ## Market data and candle timing
-- In the complete merged implementation, `feed.py` orchestrates optional verified TradingView OANDA history (`tradingview_feed.py`), Twelve Data spot, and Yahoo gold-futures fallback.
+- In the tracked implementation, `feed.py` orchestrates optional verified TradingView OANDA history (`tradingview_feed.py`), Twelve Data spot, and Yahoo gold-futures fallback.
 - TradingView uses `tvkit==0.18.0` on Python 3.11+; base operation supports Python 3.10. Repository flags default off; recorded production enables TradingView and charts.
 - Support 5m, 15m, 1h, and 4h; production selects 15m. Verify identity, OHLCV shape, timestamps, session alignment, forming/closed separation, startup seeding, and replay suppression. The TradingView request is 60 bars with a bounded 25-second deadline.
 - The approximate -0.50 offset affects Twelve Data only. OANDA tick volume and futures contract volume have different meanings. The deployed adapter retains volume/native starts for on-demand H1 images; production still schedules 15m alerts. Volume alert rules and hourly monitoring remain unspecified.
