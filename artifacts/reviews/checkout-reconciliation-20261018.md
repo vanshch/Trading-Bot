@@ -1,4 +1,4 @@
-# Checkout reconciliation â€” 18 October 2026
+# Checkout reconciliation — 18 October 2026
 
 Scope: repository ownership, preservation, documentation and local Git cleanup.
 Runtime source, dependencies, alert rules, production and paused experiments are
@@ -39,8 +39,9 @@ and used as the reviewed starting point. This is not a runtime health check.
   logs remain locally available. Private historical artifacts use targeted local
   `.git/info/exclude` entries; raw experiments are also covered by `.gitignore`.
 - The complete detached `D:/projects/bot_agy-no-chart-delay` worktree was preserved
-  through reconciliation. It may be retired only after final primary verification,
-  checking its files against recovery and confirming no active work depends on it.
+  through reconciliation, then retired after every tracked file matched primary,
+  all non-cache files matched recovery, and no active T3 run depended on it. Only
+  the primary and this temporary review worktree remain until integration cleanup.
 
 ## Branch decisions
 
@@ -48,13 +49,13 @@ Immediately before removal, each candidate was checked as an ancestor of primary
 main and absent from active worktree branch references. Eight original local
 branches were removed; all their refs/objects remain in the private bundle:
 
-- `archive/manual-hourly-charts-20261013-20261015` â€” `88226a1`.
+- `archive/manual-hourly-charts-20261013-20261015` — `88226a1`.
 - `archive/tradingview-oanda-feed-20261015`, `codex/agy-chart-buttons-20261013`,
-  `codex/agy-on-demand-hourly-chart` â€” `a2a0400`.
-- `codex/browserless-alert-screenshots` â€” `5e7c8af`.
-- `codex/manual-hourly-charts-20261013` â€” `71686b6`.
-- `codex/startup-candle-guard` â€” `ac42892`.
-- `codex/tradingview-oanda-feed` â€” `b2ebe8f`.
+  `codex/agy-on-demand-hourly-chart` — `a2a0400`.
+- `codex/browserless-alert-screenshots` — `5e7c8af`.
+- `codex/manual-hourly-charts-20261013` — `71686b6`.
+- `codex/startup-candle-guard` — `ac42892`.
+- `codex/tradingview-oanda-feed` — `b2ebe8f`.
 
 The temporary recovery branch at `ce197ca` was also removed after fast-forward.
 **Retained unique history:** `codex/wisper_smal` at `fdab008` and
@@ -81,3 +82,13 @@ the matching interpreter/dependencies.
 Production remains at the last recorded PR #4 deployment. PR #5 is merged but
 undeployed; its no-cooldown behavior is not claimed as production behavior.
 Durable delivery retry, polling and memory follow-ups remain unresolved.
+
+CodeRabbit CLI **0.9.0**, authenticated remote review, observed **18 October
+15:47 UTC / 21:17 IST**: completed against main `a0f0a20` at feature head
+`bf227e0ad786bc7d8600ba245f6da7d568612e18`. **One minor finding** concerned
+mojibake in this evidence file; corrected and UTF-8-checked. No substantive
+findings. [Generated report](checkout-reconciliation-coderabbit-20261018.ndjson).
+Later edits only record review/cleanup/integration evidence; runtime/tests are unchanged.
+
+Review command (WSL `/tmp`, avoiding Windows Git worktree path translation):
+`coderabbit review --agent --remote vanshch/Trading-Bot --base main --source-branch feature/reconcile-primary-checkout`.
