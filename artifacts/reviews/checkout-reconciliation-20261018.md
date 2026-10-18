@@ -1,4 +1,4 @@
-# Checkout reconciliation — 18 October 2026
+# Checkout reconciliation â€” 18 October 2026
 
 Scope: repository ownership, preservation, documentation and local Git cleanup.
 Runtime source, dependencies, alert rules, production and paused experiments are
@@ -48,13 +48,13 @@ Immediately before removal, each candidate was checked as an ancestor of primary
 main and absent from active worktree branch references. Eight original local
 branches were removed; all their refs/objects remain in the private bundle:
 
-- `archive/manual-hourly-charts-20261013-20261015` — `88226a1`.
+- `archive/manual-hourly-charts-20261013-20261015` â€” `88226a1`.
 - `archive/tradingview-oanda-feed-20261015`, `codex/agy-chart-buttons-20261013`,
-  `codex/agy-on-demand-hourly-chart` — `a2a0400`.
-- `codex/browserless-alert-screenshots` — `5e7c8af`.
-- `codex/manual-hourly-charts-20261013` — `71686b6`.
-- `codex/startup-candle-guard` — `ac42892`.
-- `codex/tradingview-oanda-feed` — `b2ebe8f`.
+  `codex/agy-on-demand-hourly-chart` â€” `a2a0400`.
+- `codex/browserless-alert-screenshots` â€” `5e7c8af`.
+- `codex/manual-hourly-charts-20261013` â€” `71686b6`.
+- `codex/startup-candle-guard` â€” `ac42892`.
+- `codex/tradingview-oanda-feed` â€” `b2ebe8f`.
 
 The temporary recovery branch at `ce197ca` was also removed after fast-forward.
 **Retained unique history:** `codex/wisper_smal` at `fdab008` and
@@ -69,6 +69,10 @@ document links resolve; progress is below both caps; snapshot byte comparisons
 and Git whitespace checks pass. Preserved evidence has targeted Git attributes
 to retain original line endings. CodeRabbit/integration evidence follows after
 actual observation.
+
+Linux/WSL harness: **8/8 tests passed** (38.703s), 18 October 15:44 UTC.
+The index was explicitly re-added with the preservation attributes; all copied
+historical bytes were verified against the private originals before review.
 The documentation establishes checkout/dependency/platform preflight instead of
 repeating the original audit's unsupported `/opt/...` import diagnosis. Linux's
 `resource` module belongs to the Linux soak harness; missing `telegram` requires
