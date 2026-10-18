@@ -283,8 +283,11 @@ python -m unittest discover -s tests -p test_tradingview_feed.py
 python -m unittest discover -s tests -p test_manual_charts.py
 ```
 
-CI runs the active XAU/USD suites on Python 3.10 and 3.12. Historical YouTube files
-remain in GitHub for now; their tests are outside this bot's runtime and CI scope.
+CI runs the active XAU/USD suites on Python 3.10 and 3.12. The retired YouTube
+implementation, its tests/plans and obsolete Docker/Cloud Build recipes are no
+longer tracked in the current tree. Their versions remain in Git history through
+`7c50d4b`; ignored local copies may remain. Use the named test patterns above so
+local historical tests are not accidentally collected.
 PRs #1–#4 are merged; deployed source revision is `05527f7857219432074deb5a6377e0b0009322e0`. Deploy all eight runtime modules (`bot`, `alerts`, `config`, `feed`, `screenshots`, `tradingview_feed`, `hourly_chart`, `manual_charts`) and matching dependencies together. Repository automatic-feature defaults remain off; production flags are on. Private credentials and current alert state were preserved. See progress and [13 October deployment](docs/manual-charts-deployment-20261013.md) for actual verification, dependency overlay, rollback, historical pause and remaining manual/device and gold-session limits. Do not start production or paused experiments as part of documentation maintenance.
 
 ## 9. On-demand screenshots and hourly volume charts

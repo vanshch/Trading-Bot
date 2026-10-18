@@ -28,7 +28,7 @@ This is a reference map for the current XAU/USD candle alert bot, not an install
 - For trigger audits, reconstruct alert activation and invalidation times from service/system logs, replay the same provider candle history independently, and compare expected closes with dispatch records. Check log coverage and separate polling errors from send failures; never start a competing production-token poller.
 
 ## Historical scope
-The YouTube/audio/LLM signal pipeline is disabled. Historical references live under `docs/legacy/` and in the primary checkout's `archives/` and `archive.md`; load them only for a relevant historical task. They are not current bot requirements.
+The YouTube/audio/LLM signal pipeline is disabled and no longer tracked in the current tree. Source/tests/plans and obsolete deployment recipes remain in Git history through `7c50d4b` and may exist as ignored local copies. Historical references live under `docs/legacy/` and in the primary checkout's `archives/` and `archive.md`; load them only for a relevant historical task. They are not current bot requirements. Keep the named active test patterns when local historical tests remain on disk.
 
 ## Repository reconciliation and review
 - Start with Git state/ancestry and private recovery copies; CodeRabbit reviews the finished diff but cannot establish whether local-only files or unique commits are safe to remove.
