@@ -71,3 +71,12 @@ cooldown, clean-clone/local test differences and known limits. `.env.example`
 labels Twelve Data as fallback and documents its existing -0.50 default. Active
 code, manifests, CI and immutable history remain unchanged. Current Markdown
 links were checked against tracked paths, not ignored legacy copies.
+
+Publication/documentation review: CodeRabbit CLI **0.9.0**, observed **2026-10-18T16:23:23.290413+00:00**,
+reviewed head `1d1d61d3c935ac14646debef53fffeffc5ea436f` against `main`
+`7c50d4b`: **zero findings**. [Generated final review](untrack-publication-coderabbit-20261018.ndjson).
+[CI 39144507466](https://github.com/vanshch/Trading-Bot/actions/runs/39144507466)
+passed both Python versions and the optional-provider/Linux harness job on that
+reviewed head. Later changes only retain this evidence; final-head checks and
+merge result remain linked through PR #8. All five contributor documents were
+reviewed together; no runtime/dependency/CI/history changes or production checks.
