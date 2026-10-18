@@ -57,3 +57,17 @@ documentation alignment describes the tracked GitHub tree, correct setup/default
 current no-cooldown source and separately dated production observations. Earlier
 local validation is unchanged; final CI/integration is owned by the publication
 PR and does not constitute a production check.
+
+## GitHub publication
+
+Published as [PR #8](https://github.com/vanshch/Trading-Bot/pull/8). Its
+[final checks](https://github.com/vanshch/Trading-Bot/pull/8/checks) and merge
+record own the exact final CI/integration outcome. Only merge after final-head
+CI succeeds. The cleanup and documentation do not change deployed runtime.
+
+The README now maps the current tracked tree, concrete clone/setup commands,
+actual environment defaults, one-in-flight manual charts without a source-level
+cooldown, clean-clone/local test differences and known limits. `.env.example`
+labels Twelve Data as fallback and documents its existing -0.50 default. Active
+code, manifests, CI and immutable history remain unchanged. Current Markdown
+links were checked against tracked paths, not ignored legacy copies.
