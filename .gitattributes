@@ -1,0 +1,4 @@
+# Preserve copied historical evidence byte-for-byte, including original CRLF.
+docs/legacy/primary-preserved-20261018/** -text whitespace=cr-at-eol
+docs/progress-history/primary-preserved-20261018/** -text whitespace=cr-at-eol
+docs/progress-history/2026-10-18-153926-187840-before-checkout-reconciliation.md -text whitespace=cr-at-eol

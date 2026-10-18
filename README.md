@@ -9,9 +9,9 @@ memory preflight and service/source checks passed; the user is testing manual
 Telegram photo delivery. Polling errors, memory pressure and durable delivery
 retries remain operational follow-ups; see `progress.md`.
 Read `progress.md` for exact deployed commit, evidence, runtime override and rollback.
-The primary local checkout retains older/uncommitted work; GitHub main is the
-authoritative merged source. See progress for a complete local checkout and changes
-that have not been deployed.
+GitHub main is the authoritative merged source. The primary local checkout is
+`D:/projects/bot_agy`; use its reviewed revision for future work. See progress for
+checkout reconciliation evidence and changes that have not been deployed.
 
 A high-performance real-time Telegram bot designed to monitor Gold spot market data (`XAU/USD`) and deliver instant market momentum alerts, candle close notifications, dynamic price level tracking, and interactive status controls.
 
@@ -140,7 +140,11 @@ sudo systemctl restart xauusd-bot.service
 
 ## 6. Local Setup & Configuration
 
-Use the complete merged checkout identified above until this primary folder is reconciled; its older local source lacks the merged optional modules and checks.
+Use the primary checkout or a clean feature worktree based on reviewed main.
+Before editing, check `git status --short --branch`, `git worktree list`, and
+`git log -1 --oneline`; preserve unrelated work before switching or updating.
+Recovery details for the former primary state are in
+[checkout reconciliation](artifacts/reviews/checkout-reconciliation-20261018.md).
 
 ### Prerequisites
 - Python 3.10+ for base operation; Python 3.11+ for optional TradingView/tvkit (production: 3.12.15).
