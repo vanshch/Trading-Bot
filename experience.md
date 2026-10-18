@@ -5,6 +5,8 @@ These are durable lessons for the active candle alert bot. Current architecture 
 ## Keep source and state explicit
 - A merged PR does not establish deployment, enabled flags, runtime compatibility, or live alert delivery. Verify each separately and record actual observation times.
 - Worktrees share Git history but have independent files. Check the branch/revision and dirty state before edits or deployment; preserve local-only changes and transfer reviewed changes through Git rather than copying old source onto newer code.
+- A detached HEAD can be the only complete checkout. Verify source completeness, ancestry and active references before cleanup. Bundle all refs and preserve private local files separately; Git bundles do not contain uncommitted state or ignored evidence. Preserve divergent same-named history snapshots under distinct paths.
+- Missing packages and OS-specific harness imports are different failures. Use the matching virtual environment for `telegram`, and Linux/WSL for the soak harness's `resource` dependency; do not infer a runtime path defect from unrelated tool failures.
 - Read the current handoff before operational decisions. Historical successes cannot override a later user stop/pause, and editing documentation does not verify a timer's future execution.
 
 ## Treat market feeds as different contracts

@@ -59,6 +59,9 @@ data/*.tmp
 .stt_cache/
 .codex-*.md
 .chart-artifacts/
+# Local experiment databases, provider evidence and raw logs are private.
+/.experiments/
+.ruff_cache/
 
 # Local handoff and generated deployment artifacts
 HANDOFF_CODEX.md

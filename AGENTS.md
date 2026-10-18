@@ -26,7 +26,13 @@
 - **Runtime**: Python 3.10+ base; Python 3.11+ for optional tvkit; async `python-telegram-bot` v20+, `httpx`, and `python-dotenv`. Recorded production runtime is Python 3.12.15.
 - **Production**: GCE `trade-bot-vm`, project `true-ion-434206-f2`, zone `us-central1-a`, `e2-micro`; `xauusd-bot.service` under `bot_deployer` in `/opt/xauusd_telegram_bot`. Memory limits: `MemoryHigh=90M`, `MemoryMax=120M`.
 - **Feature flags**: repository defaults are disabled for TradingView and Browserless screenshots. Consult `progress.md` for deployed revision, enabled flags, user pauses, last verification, and rollback; do not infer current service health from a merge.
-- **Checkout**: the primary folder retains older/uncommitted work. GitHub main is authoritative; consult progress for a complete local checkout and exact deployed revision. Use complete reviewed source for validation/deployment until reconciliation; main can contain undeployed changes, and documentation-only commits do not change runtime hashes.
+- **Checkout**: GitHub main is authoritative; `D:/projects/bot_agy` is the primary local checkout. Check its revision and dirty state before work. Main can contain undeployed changes; documentation-only commits do not change runtime hashes. Consult progress for exact deployed revision, reconciliation evidence and recovery.
+
+## Checkout and platform preflight
+- Run `git status --short --branch`, `git worktree list`, and `git log -1 --oneline` before editing. Use a dedicated feature branch/worktree based on reviewed main; never edit a dirty base branch or remove a worktree only because HEAD is detached.
+- Before cleanup, preserve staged/unstaged changes, untracked files, private ignored state/evidence and all Git refs in a verified private recovery location outside the repository. Exclude reproducible virtual environments/caches; record exclusions. Never upload recovery copies or raw private logs.
+- Recheck ancestry and active worktree references immediately before local branch removal. Preserve unique history and unrelated deletion intent. Remote branch deletion is a separate action.
+- Use the selected interpreter with `python -m pip`; install matching requirements before offline tests. Missing `telegram` is a dependency/interpreter problem. `tools/tradingview_soak` uses Linux's `resource` module and runs on Linux/WSL; it is not a Windows runtime requirement. Keep `/opt/...` paths in Linux operations, not Python import paths. Diagnose actual errors before adding platform workarounds.
 
 ## Commands
 
@@ -46,7 +52,7 @@
 - Restart only within authorized deployment/operations work and respecting all user pauses: `sudo systemctl restart xauusd-bot.service`.
 
 ### Production Code Deployment
-1. Check current `progress.md`, the complete reviewed revision, rollback evidence, and user authorization; never deploy this older primary source wholesale or override a requested pause.
+1. Check current `progress.md`, the complete reviewed revision, rollback evidence, and user authorization; never deploy stale or dirty source or override a requested pause. Checkout reconciliation does not authorize deployment.
 2. Validate the active source/tests above. Production source comprises `bot.py`, `alerts.py`, `config.py`, `feed.py`, `tradingview_feed.py`, `screenshots.py`, `hourly_chart.py`, and `manual_charts.py`; install matching dependency manifests in the target runtime. Preserve private `.env` and current `data/alerts.json`.
    Pillow 12.3.0 is deployed through an isolated PYTHONPATH drop-in; direct maintenance/preflight commands need that service environment. Deploy all eight modules together after combined Linux memory checks; consult progress for current revision and rollback.
 3. For this feature, stage all eight source files to `/tmp` with `gcloud compute scp bot.py alerts.py config.py feed.py tradingview_feed.py screenshots.py hourly_chart.py manual_charts.py trade-bot-vm:/tmp/ --project=true-ion-434206-f2 --zone=us-central1-a --quiet`.
