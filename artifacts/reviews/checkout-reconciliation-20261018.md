@@ -39,7 +39,8 @@ and used as the reviewed starting point. This is not a runtime health check.
   logs remain locally available. Private historical artifacts use targeted local
   `.git/info/exclude` entries; raw experiments are also covered by `.gitignore`.
 - The complete detached `D:/projects/bot_agy-no-chart-delay` worktree was preserved
-  through reconciliation, then retired after every tracked file matched primary,
+  through reconciliation, then retired after every tracked file matched primary through Git's normal
+  Windows line-ending normalization,
   all non-cache files matched recovery, and no active T3 run depended on it. Only
   the primary and this temporary review worktree remain until integration cleanup.
 
@@ -84,7 +85,7 @@ undeployed; its no-cooldown behavior is not claimed as production behavior.
 Durable delivery retry, polling and memory follow-ups remain unresolved.
 
 CodeRabbit CLI **0.9.0**, authenticated remote review, observed **18 October
-15:47 UTC / 21:17 IST**: completed against main `a0f0a20` at feature head
+15:48:17 UTC (report reverified)**: completed against main `a0f0a20` at feature head
 `bf227e0ad786bc7d8600ba245f6da7d568612e18`. **One minor finding** concerned
 mojibake in this evidence file; corrected and UTF-8-checked. No substantive
 findings. [Generated report](checkout-reconciliation-coderabbit-20261018.ndjson).
