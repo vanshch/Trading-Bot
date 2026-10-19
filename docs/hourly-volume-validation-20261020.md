@@ -52,7 +52,8 @@ httpx 0.28.1, python-dotenv 1.2.2, Pillow 12.3.0.
   findings; two minor documentation ownership findings, both resolved by moving
   branch/testing status to progress. [Generated report](../artifacts/reviews/hourly-volume-coderabbit-20261020.md).
   The later code correction only changes invalid JSON root classification from
-  ValueError to TypeError; its 28-test rerun is recorded above. Hosted CI pending.
+  ValueError to TypeError; its 28-test rerun is recorded above. Draft [PR #9](https://github.com/vanshch/Trading-Bot/pull/9) is linked to the task;
+  hosted CI is pending.
 
 Reproduce the new suite without contacting providers or Telegram:
 
