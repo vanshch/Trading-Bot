@@ -1,8 +1,10 @@
 import json
+import math
 import os
 import time
+from copy import deepcopy
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from config import logger
 
@@ -10,6 +12,7 @@ DATA_DIR = Path(__file__).parent / "data"
 ALERTS_FILE = DATA_DIR / "alerts.json"
 
 DEFAULT_DATA = {
+    "hourly_volume": {"enabled": False, "armed_after": 0, "last_processed": 0},
     "settings": {
         "two_green_candles": False,
         "two_red_candles": False,
@@ -32,6 +35,20 @@ class AlertManager:
         try:
             with open(self.file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
+                if not isinstance(data, dict):
+                    raise ValueError("Invalid alert state")
+                volume = data.get("hourly_volume")
+                if (
+                    not isinstance(volume, dict)
+                    or type(volume.get("enabled")) is not bool
+                    or any(
+                        type(volume.get(key)) not in (int, float)
+                        or not math.isfinite(volume[key])
+                        or volume[key] < 0
+                        for key in ("armed_after", "last_processed")
+                    )
+                ):
+                    data["hourly_volume"] = DEFAULT_DATA["hourly_volume"].copy()
                 if "settings" not in data:
                     data["settings"] = DEFAULT_DATA["settings"].copy()
                 else:
@@ -45,7 +62,7 @@ class AlertManager:
                 return data
         except Exception as e:
             logger.error(f"Failed to read alerts.json: {e}. Resetting to defaults.")
-            return DEFAULT_DATA.copy()
+            return deepcopy(DEFAULT_DATA)
 
     def _write(self, data: Dict[str, Any]):
         tmp_file = self.file_path.with_suffix(".tmp")
@@ -53,10 +70,41 @@ class AlertManager:
             with open(tmp_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
             tmp_file.replace(self.file_path)
+            return True
         except Exception as e:
             logger.error(f"Failed to write alerts.json: {e}")
             if tmp_file.exists():
                 tmp_file.unlink(missing_ok=True)
+            return False
+
+    def is_hourly_volume_enabled(self) -> bool:
+        return self._read()["hourly_volume"]["enabled"] is True
+
+    def toggle_hourly_volume(self) -> bool:
+        data = self._read()
+        enabled = data["hourly_volume"]["enabled"] is not True
+        data["hourly_volume"] = {
+            "enabled": enabled,
+            "armed_after": time.time(),
+            "last_processed": 0,
+        }
+        if not self._write(data):
+            raise OSError("Hourly volume alarm could not be saved")
+        return enabled
+
+    def process_hourly_volume_close(self, timestamp: int, qualifies: bool, *, not_before: float) -> bool:
+        data = self._read()
+        alarm = data["hourly_volume"]
+        if alarm["enabled"] is not True or timestamp <= max(
+            not_before, alarm["armed_after"], alarm["last_processed"]
+        ):
+            return False
+        alarm["last_processed"] = timestamp
+        if qualifies:
+            alarm["enabled"] = False
+        if not self._write(data):
+            raise OSError("Hourly volume alarm result could not be saved")
+        return qualifies
 
     def is_setting_enabled(self, setting_name: str) -> bool:
         data = self._read()

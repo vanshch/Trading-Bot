@@ -1,23 +1,26 @@
 import asyncio
+import time
 from datetime import datetime, timezone
 from functools import wraps
-from typing import Callable, Any, List
+from typing import Any, Callable, List
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
     ApplicationBuilder,
-    CommandHandler,
     CallbackQueryHandler,
+    CommandHandler,
     ContextTypes,
 )
 
 import config
-from config import logger
 import feed
-from screenshots import send_alert_chart
-from manual_charts import request_chart
 from alerts import alert_manager
+from config import logger
+from hourly_volume import SETTING_LABEL, check_hourly_volume
+from manual_charts import request_chart
+from screenshots import send_alert_chart
+
 
 def authorized_only(func: Callable) -> Callable:
     @wraps(func)
@@ -33,11 +36,13 @@ def get_keyboard() -> InlineKeyboardMarkup:
     two_green = "ON" if alert_manager.is_setting_enabled("two_green_candles") else "OFF"
     two_red = "ON" if alert_manager.is_setting_enabled("two_red_candles") else "OFF"
     active_alerts_cnt = len(alert_manager.get_active_price_alerts())
+    volume = "ON" if alert_manager.is_hourly_volume_enabled() else "OFF"
 
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 Live & Closed Bar", callback_data="btn_latest")],
         [InlineKeyboardButton("📸 Screenshot Now", callback_data="btn_screenshot"),
          InlineKeyboardButton("🕐 1H Chart + Volume", callback_data="btn_hourly_chart")],
+        [InlineKeyboardButton(f"🔊 {SETTING_LABEL}: {volume}", callback_data="btn_hourly_volume")],
         [
             InlineKeyboardButton(f"🟢🟢 2-Green: {two_green}", callback_data="btn_two_green"),
             InlineKeyboardButton(f"🔴🔴 2-Red: {two_red}", callback_data="btn_two_red"),
@@ -72,6 +77,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/candle` — View live forming bar and last closed bar\n"
         "• `/screenshot` — Capture the TradingView screenshot now\n"
         "• `/chart1h` — Latest 20 hourly candles with tick volume\n"
+        "• `/volume1h` — Toggle one-shot 1H volume ≥120% of previous 20 hours' average\n"
         "• `/status` — View current bot and alert settings"
     )
     if update.message:
@@ -195,6 +201,7 @@ def build_alerts_list_view():
         f"⚙️ *Momentum Alert Settings:*\n"
         f"• 2-Green Alert: `{two_green_status}`\n"
         f"• 2-Red Alert: `{two_red_status}`\n"
+        f"• {SETTING_LABEL}: `{'ON (One-Shot)' if alert_manager.is_hourly_volume_enabled() else 'OFF'}`\n"
         f"• Timeframe: `{config.state.current_timeframe}`\n\n"
     )
 
@@ -263,6 +270,8 @@ def build_status_text() -> str:
         f"• *Price Offset*: `{offset_str}`\n"
         f"• *2-Green Momentum Alert*: `{two_green}`\n"
         f"• *2-Red Momentum Alert*: `{two_red}`\n"
+        f"• *{SETTING_LABEL}*: `{'ON (One-Shot)' if alert_manager.is_hourly_volume_enabled() else 'OFF'}`\n"
+        "• *Hourly Volume Source*: verified OANDA tick volume; no fallback\n"
         f"• *Active Price Targets*: `{active_alerts_cnt}`\n"
         f"• *Feed Source*: {config.state.last_feed_source}\n"
         f"• *Next Candle Check*: in {m}m {s}s"
@@ -276,6 +285,27 @@ async def screenshot_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 @authorized_only
 async def hourly_chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await request_chart(context, "hourly", "1h")
+
+
+def toggle_hourly_volume_text() -> str:
+    enabled = alert_manager.toggle_hourly_volume()
+    return (
+        f"🔊 *Hourly High-Volume Alarm: {'ON' if enabled else 'OFF'}*\n"
+        "• Triggers after a 1H candle closes with tick volume at least 20% above "
+        "the preceding 20 completed hourly candles' average.\n"
+        "• The evaluated candle is excluded from that average. Small grazes are ignored.\n"
+        "• One-shot: switches OFF after one alert. No alert while the candle is forming.\n"
+        "• Uses verified OANDA tick volume; "
+        "unavailable data leaves it armed. Existing price/momentum timeframe is unchanged."
+    )
+
+
+@authorized_only
+async def hourly_volume_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message:
+        await update.message.reply_text(
+            toggle_hourly_volume_text(), reply_markup=get_keyboard(), parse_mode="Markdown"
+        )
 
 
 @authorized_only
@@ -292,6 +322,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "btn_hourly_chart":
         await request_chart(context, "hourly", "1h")
+
+    elif data == "btn_hourly_volume":
+        await query.edit_message_text(
+            text=toggle_hourly_volume_text(), reply_markup=get_keyboard(), parse_mode="Markdown"
+        )
 
     elif data == "btn_latest":
         text = await build_candle_view()
@@ -480,13 +515,27 @@ async def candle_scheduler(app: Application):
             logger.error(f"Error in candle scheduler: {e}", exc_info=True)
             await asyncio.sleep(5)
 
+async def hourly_volume_scheduler(app: Application, *, started_at: float):
+    while True:
+        try:
+            await asyncio.sleep(calculate_next_wait_seconds("1h"))
+            await check_hourly_volume(app.bot, alert_manager, started_at=started_at)
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:  # noqa: BLE001 - isolate this optional scheduler; redact credentials
+            # Telegram/provider errors may embed credentials; never print payloads.
+            logger.warning("Hourly volume alarm check failed (%s)", type(exc).__name__)
+
+
 async def post_init(app: Application):
+    started_at = time.time()
     tf = config.state.current_timeframe
     latest = await feed.get_latest_candle(tf)
     if latest:
         # Existing history is startup context, not a fresh post-start alert.
         config.state.last_alerted_candle_time = f"{tf}_{latest['timestamp']}"
     asyncio.create_task(candle_scheduler(app))
+    asyncio.create_task(hourly_volume_scheduler(app, started_at=started_at))
     try:
         await app.bot.send_message(
             chat_id=config.ALLOWED_USER_ID,
@@ -515,6 +564,7 @@ def main():
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("screenshot", screenshot_command))
     app.add_handler(CommandHandler("chart1h", hourly_chart_command))
+    app.add_handler(CommandHandler("volume1h", hourly_volume_command))
     app.add_handler(CallbackQueryHandler(button_callback))
 
     app.run_polling(drop_pending_updates=True)

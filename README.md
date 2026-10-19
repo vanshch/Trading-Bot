@@ -18,7 +18,8 @@ settings are documented separately below.
 - `screenshots.py`: optional remote Browserless TradingView captures.
 - `manual_charts.py`: background manual-chart requests with shared busy protection.
 - `hourly_chart.py`: Pillow renderer for 20 verified OANDA hourly candles/tick volume.
-- `tests/`: five active offline suites; `.github/workflows/xauusd-checks.yml` runs CI.
+- `hourly_volume.py`: opt-in one-shot closed-H1 OANDA tick-volume alarm (feature branch).
+- `tests/`: six active offline suites; `.github/workflows/xauusd-checks.yml` runs CI.
 - `tools/preview_hourly_chart.py` and `test_chart_delivery.py`: explicit live capture
   tools. `tools/tradingview_soak/` preserves the Linux offline harness and procedure.
 - `docs/` and `artifacts/reviews/`: historical handoffs, deployment and review evidence.
@@ -93,6 +94,11 @@ rejected. `/start` opens the inline control panel.
 - `/status`: inspect bot uptime/settings/feed information.
 - `/screenshot`: request the saved TradingView layout at the active alert timeframe.
 - `/chart1h`: render exactly 20 native OANDA hourly candles with tick volume.
+- `/volume1h` or **🔊 1H Volume ≥120% MA20**: arm/cancel the hourly volume alarm.
+  It sends one text alert when a completed H1 candle has OANDA tick volume
+  **at least 1.20 × the mean of the preceding 20 completed H1 candles**.
+  The evaluated candle is excluded; small grazes are ignored. This feature is
+  on `feature/hourly-volume-alert`, pending user testing and merge.
 
 A wick rejection requires the wick to touch/pierce a level while the candle body
 stays on the unbroken side. A body breakout waits for the immediate next candle:
@@ -106,6 +112,18 @@ fallback. Settings are atomically replaced in `data/alerts.json` and recover to
 safe defaults if missing/corrupt. Supported configured timeframes are 5m, 15m, 1h
 and 4h; default/recorded production monitoring is 15m. The active menu has no
 interactive timeframe selector. H1 charts do not enable a second alert scheduler.
+
+The volume alarm has its own hourly check (UTC hour boundary plus 10 seconds),
+without changing price/momentum monitoring. It fetches only while armed and
+requires optional tvkit/Python 3.11+, independently of `TRADINGVIEW_FEED_ENABLED`,
+as an explicit user request. Only verified OANDA tick volume is accepted; no
+Twelve Data/Yahoo volume is substituted. It needs 21 closed bars, skips forming
+bars and closes before arming/restart, and persists its one-shot state atomically.
+The baseline is 20 **trading bars**, allowing session/weekend gaps, and differs
+from an SMA that includes the evaluated bar. Unavailable data leaves the alarm
+armed for the next hourly check. No intrabar alert, catch-up/backfill, photo or
+durable send retry is implemented. Like momentum alerts, its one-shot state is
+consumed before sending. See the [isolated test procedure and validation limits](docs/hourly-volume-validation-20261020.md).
 
 ## Data and chart contracts
 
@@ -133,15 +151,16 @@ it does not reproduce saved TradingView drawings or indicators.
 ## Validation
 
 ```sh
-python -m py_compile bot.py alerts.py config.py feed.py tradingview_feed.py screenshots.py hourly_chart.py manual_charts.py test_chart_delivery.py tools/preview_hourly_chart.py
+python -m py_compile bot.py alerts.py config.py feed.py tradingview_feed.py screenshots.py hourly_chart.py manual_charts.py hourly_volume.py test_chart_delivery.py tools/preview_hourly_chart.py
 python -m unittest discover -s tests -p test_alerts.py
 python -m unittest discover -s tests -p test_screenshots.py
 python -m unittest discover -s tests -p test_chart_scheduler.py
 python -m unittest discover -s tests -p test_tradingview_feed.py
 python -m unittest discover -s tests -p test_manual_charts.py
+python -m unittest discover -s tests -p test_hourly_volume.py
 ```
 
-These five suites contain 50 offline tests. CI runs Python 3.10/3.12, plus an
+These six suites contain 70 offline tests. CI runs Python 3.10/3.12, plus an
 optional-provider dependency job and eight Linux harness checks. On Linux/WSL:
 
 ```sh
@@ -187,8 +206,8 @@ observation times, memory limits, private-state preservation and rollback.
 
 Polling errors, memory pressure, durable delivery-event persistence/retry and a
 continuous OANDA market-session soak remain open. One-shot state is consumed
-before sending and there is no durable outbox. Hourly/volume alert rules and a
-recurring market-hours gate are not enabled/implemented. Experiments remain
+before sending and there is no durable outbox. The branch-only hourly volume alarm is not deployed/enabled in production;
+a recurring market-hours gate is not implemented. Experiments remain
 paused. Prior BTC/historical-candle checks do not qualify future live gold delivery.
 
 ## Contributor and historical documentation

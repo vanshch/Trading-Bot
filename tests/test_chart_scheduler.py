@@ -33,7 +33,7 @@ class SchedulerChartTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(bot.asyncio, "create_task", side_effect=discard_task) as create:
             await bot.post_init(SimpleNamespace(bot=AsyncMock()))
         self.assertEqual(state.last_alerted_candle_time, "")
-        self.assertEqual(create.call_count, 1)
+        self.assertEqual(create.call_count, 2)
 
     async def test_older_fallback_candle_does_not_replay_price_alert_evaluation(self):
         latest = dict(timestamp="100000", is_green=True, pips=10)
