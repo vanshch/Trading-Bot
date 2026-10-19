@@ -18,7 +18,7 @@ settings are documented separately below.
 - `screenshots.py`: optional remote Browserless TradingView captures.
 - `manual_charts.py`: background manual-chart requests with shared busy protection.
 - `hourly_chart.py`: Pillow renderer for 20 verified OANDA hourly candles/tick volume.
-- `hourly_volume.py`: opt-in one-shot closed-H1 OANDA tick-volume alarm (feature branch).
+- `hourly_volume.py`: opt-in one-shot closed-H1 OANDA tick-volume alarm.
 - `tests/`: six active offline suites; `.github/workflows/xauusd-checks.yml` runs CI.
 - `tools/preview_hourly_chart.py` and `test_chart_delivery.py`: explicit live capture
   tools. `tools/tradingview_soak/` preserves the Linux offline harness and procedure.
@@ -97,8 +97,8 @@ rejected. `/start` opens the inline control panel.
 - `/volume1h` or **🔊 1H Volume ≥120% MA20**: arm/cancel the hourly volume alarm.
   It sends one text alert when a completed H1 candle has OANDA tick volume
   **at least 1.20 × the mean of the preceding 20 completed H1 candles**.
-  The evaluated candle is excluded; small grazes are ignored. This feature is
-  on `feature/hourly-volume-alert`, pending user testing and merge.
+  The evaluated candle is excluded; small grazes are ignored. See
+  [progress](progress.md) for testing/deployment status.
 
 A wick rejection requires the wick to touch/pierce a level while the candle body
 stays on the unbroken side. A body breakout waits for the immediate next candle:

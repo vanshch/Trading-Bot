@@ -31,7 +31,7 @@ restart, live provider request, Telegram test send or experiment resume occurred
 
 ## Offline validation
 
-Observed **2026-10-20 03:56:42 UTC / 09:26:42 IST** on Windows, Python 3.12.0.
+Observed **2026-10-19 22:26:42 UTC / 20 October 03:56:42 IST** on Windows, Python 3.12.0.
 The selected `.venv` satisfies `requirements.txt`: python-telegram-bot 22.8,
 httpx 0.28.1, python-dotenv 1.2.2, Pillow 12.3.0.
 
@@ -43,9 +43,16 @@ httpx 0.28.1, python-dotenv 1.2.2, Pillow 12.3.0.
   re-arm/restart/replay suppression, in-flight OFF/re-arm, failed state writes,
   single-user authorization, independent timeframe and scheduler recovery/cancel.
 - Ruff 0.16.3 lint and format checks pass for the two new Python files.
-  Existing modules have inherited broad lint/format debt; no repository-wide
+  Existing modified modules have no new Ruff findings compared with main
+  (alerts 19→18, bot 6→5, scheduler tests 4→4). They retain broad lint/format debt; no repository-wide
   clean-lint claim is made. CI includes the new suite on Python 3.10/3.12.
-- CodeRabbit CLI review and hosted CI: pending at this checkpoint.
+- Following a lint-driven exception-type correction, 28 alert/volume tests
+  passed again at **19 October 22:30:25 UTC / 20 October 04:00:25 IST**.
+- CodeRabbit CLI 0.9.0 reviewed commit `08bf97e` against `origin/main`: no code
+  findings; two minor documentation ownership findings, both resolved by moving
+  branch/testing status to progress. [Generated report](../artifacts/reviews/hourly-volume-coderabbit-20261020.md).
+  The later code correction only changes invalid JSON root classification from
+  ValueError to TypeError; its 28-test rerun is recorded above. Hosted CI pending.
 
 Reproduce the new suite without contacting providers or Telegram:
 

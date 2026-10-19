@@ -36,7 +36,7 @@ class AlertManager:
             with open(self.file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if not isinstance(data, dict):
-                    raise ValueError("Invalid alert state")
+                    raise TypeError("Invalid alert state")
                 volume = data.get("hourly_volume")
                 if (
                     not isinstance(volume, dict)
