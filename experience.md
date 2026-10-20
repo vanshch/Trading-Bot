@@ -20,6 +20,7 @@ These are durable lessons for the active candle alert bot. Current architecture 
 ## Evaluate only genuinely new closes
 - Exclude forming candles, seed startup with the latest available completed candle, and suppress equal/older timestamps across replay or fallback. Restarting must not evaluate old history against saved alerts.
 - Fresh two-candle streaks and ongoing streaks are distinct. Keep timestamp deduplication and one-shot reset separate from pattern recognition.
+- Define volume thresholds numerically and identify whether the evaluated bar is included in the moving average. A previous-20 baseline needs 21 completed bars; forming-bar volume and spot/futures fallback cannot qualify an OANDA H1 close. Persist arming and processed-close times; apply a process-start cutoff to prevent restart replay without changing the primary timeframe.
 - Test candle-boundary scheduling with deterministic time. Artificial harness delays must be separated from provider latency; preserve faulty-run evidence and start corrected measurements with fresh state.
 
 ## Keep notifications and persistence reliable
