@@ -19,6 +19,28 @@ staging before production changes. Rebuilding with
 `git -c core.autocrlf=false archive` matched all nine modules and both dependency
 manifests against Git blobs. The merged revision has those same eleven hashes.
 
+This was measured locally, before any extraction or SCP, on **Git
+2.42.0.windows.2**, with `git config --get core.autocrlf` returning `true`:
+
+```sh
+git archive --format=tar --output release.tar 5578aee
+git -c core.autocrlf=false archive --format=tar --output release-lf.tar 5578aee
+```
+
+Reading `bot.py` directly from each tar: the first had **573 CRLF sequences**,
+SHA256 `e65ad86bf05539abb699404bff525293968e8d74ba68dca252a8418fd579f31b`;
+the second had **0**, SHA256
+`67749f20b5e47e57c77d47f36327718a3640cc68ea7f9f84a968cd5ff5f20f14`,
+matching `git show 5578aee:bot.py`. The first archive mismatched all eleven
+release hashes; the second matched all eleven. This is evidence for this
+checkout/toolchain; staged-byte verification remains the acceptance rule.
+Actual cutover copied both verified manifests as well as the nine modules from
+the LF staging tree; the contributor SCP example now explicitly includes both.
+
+[CodeRabbit closeout review](../artifacts/reviews/hourly-volume-deployment-closeout-coderabbit-20261020.md)
+on `99c70da` requested these two documentation clarifications. Both are resolved;
+there were no runtime source changes in this closeout.
+
 An isolated service-user cgroup used the production Python/PYTHONPATH and
 **MemoryHigh=90M, MemoryMax=120M**, with no Telegram poller or test sends.
 Two preliminary probes timed out: the first retained a redundant 5 MB original
