@@ -1,9 +1,11 @@
-# Hourly high-volume alarm: branch testing
+# Hourly high-volume alarm: implementation validation
 
 Branch: `feature/hourly-volume-alert`, based on reviewed main
 `0aa62c353c603e0ea9061e3f0ff00519931a164d` (merged PR #8).
-User explicitly requires testing before merge. No merge, deployment, production
-restart, live provider request, Telegram test send or experiment resume occurred.
+This document records the original branch-testing checkpoint. The user later
+authorized merge/deployment on 20 October; [PR #9](https://github.com/vanshch/Trading-Bot/pull/9) is now merged and
+[production deployment is recorded separately](hourly-volume-deployment-20261020.md).
+The earlier branch-only restriction is superseded. No experiment was resumed.
 
 ## Rule and interface
 
@@ -52,8 +54,9 @@ httpx 0.28.1, python-dotenv 1.2.2, Pillow 12.3.0.
   findings; two minor documentation ownership findings, both resolved by moving
   branch/testing status to progress. [Generated report](../artifacts/reviews/hourly-volume-coderabbit-20261020.md).
   The later code correction only changes invalid JSON root classification from
-  ValueError to TypeError; its 28-test rerun is recorded above. Draft [PR #9](https://github.com/vanshch/Trading-Bot/pull/9) is linked to the task;
-  hosted CI is pending.
+  ValueError to TypeError; its 28-test rerun is recorded above. [PR #9](https://github.com/vanshch/Trading-Bot/pull/9) is linked to the task;
+  all three CI jobs passed on final head `5578aee`
+  ([run 39335755861](https://github.com/vanshch/Trading-Bot/actions/runs/39335755861)).
 
 Reproduce the new suite without contacting providers or Telegram:
 
@@ -82,14 +85,13 @@ Reproduce the new suite without contacting providers or Telegram:
 
 ## Limits and rollback
 
-Live market delivery, device receipt, production memory/latency and a sustained
-session soak remain unverified. Simultaneous 15m/H1 provider requests need combined
-Linux memory qualification before any future VM release. The current VM's last
-verified production state is still the 13 October release recorded in progress.
-One-shot state is consumed before sending, matching the existing momentum path;
-a failed send has no durable retry and requires re-arming. Existing Telegram
-menus are static messages; send `/start` or `/status` to refresh displayed state.
+The [deployment report](hourly-volume-deployment-20261020.md) owns the successful
+combined target-runtime memory preflight, actual rollout/startup evidence and
+verified production rollback. Live qualifying H1 delivery, device receipt and a
+sustained session soak remain unverified. One-shot state is consumed before
+sending; a failed send has no durable retry and requires re-arming. Existing
+Telegram menus are static messages; send `/start` or `/status` to refresh state.
 
-To stop an isolated test, cancel the alarm or stop its test process. Production
-needs no rollback because it was untouched. Keep the branch/draft PR unmerged
-until the user accepts testing; production deployment requires separate authority.
+The isolated test procedure above remains optional. For the authorized deployed
+bot, send `/start` and arm the new button. Deployment left its default OFF and
+preserved existing price/momentum settings. Paused experiments remain paused.

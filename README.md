@@ -196,18 +196,19 @@ Recorded deployment is GCE `trade-bot-vm`, systemd `xauusd-bot.service`, user
 The service has `MemoryHigh=90M`, `MemoryMax=120M`. Pillow **12.3.0** is supplied
 through a service PYTHONPATH overlay, which direct maintenance commands must use.
 
-**Last recorded production verification: 13 October 2026.** PRs #1–#4 were
-deployed, with TradingView and automatic photos enabled. PR #5 removes the manual
-30s cooldown in repository source but is **not recorded as deployed**; last
-verified production still had it. Repository cleanup/documentation changes do
-not restart or deploy the bot. See [progress](progress.md) and
-[deployment evidence](docs/manual-charts-deployment-20261013.md) for exact hashes,
-observation times, memory limits, private-state preservation and rollback.
+**Last recorded production verification: 20 October 2026.** PR #9 is deployed,
+including the hourly volume alarm (default OFF) and PR #5's removal of the manual
+30s cooldown. TradingView and automatic photos remain enabled; primary monitoring
+is 15m, with an independent H1 task when the volume alarm is armed. Send `/start`
+and tap **🔊 1H Volume ≥120% MA20: OFF** to arm it. See [progress](progress.md) and
+[deployment evidence](docs/hourly-volume-deployment-20261020.md) for exact hashes,
+observation times, limits, state preservation and the verified rollback backup.
+Documentation commits do not establish a newer runtime observation.
 
 Polling errors, memory pressure, durable delivery-event persistence/retry and a
 continuous OANDA market-session soak remain open. One-shot state is consumed
-before sending and there is no durable outbox. The branch-only hourly volume alarm is not deployed/enabled in production;
-a recurring market-hours gate is not implemented. Experiments remain
+before sending and there is no durable outbox. A recurring market-hours gate is not implemented. Live qualifying H1 alert
+delivery/device receipt remains pending user testing. Experiments remain
 paused. Prior BTC/historical-candle checks do not qualify future live gold delivery.
 
 ## Contributor and historical documentation

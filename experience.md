@@ -38,6 +38,7 @@ These are durable lessons for the active candle alert bot. Current architecture 
 - Keep automated checks offline with mocks/synthetic candles. Use active bot suites; disabled legacy YouTube tests are not evidence of current bot health.
 - Test failure boundaries: provider timeout/malformed identity, fallback replay, absent startup history, ongoing streaks, failed capture/photo delivery, and corrupt persistence.
 - A BTC smoke window qualifies that observed BTC window, not OANDA gold sessions. Closed-market historical fetches do not verify new market-open closes or triggers.
+- Benchmark application overlap separately from unrelated test subprocesses. Holding maximum screenshot buffers while spawning another interpreter inflates the workload. Record final process RSS separately from timestamped cgroup samples; exited cgroups may disappear. Inspect host-wide memory/I/O pressure alongside service limits.
 - Use authoritative systemd logs, deployed source hashes, memory/restart/OOM counters, and preserved state evidence. Test totals alone are insufficient acceptance evidence.
 - From Windows, encode remote Linux commands and keep them bounded/non-interactive. Use the correct `xauusd-bot.service` unit rather than legacy monitor names.
 
