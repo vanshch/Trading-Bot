@@ -12,12 +12,16 @@ UP, DOWN = '#089981', '#f23645'
 BACKGROUND, TEXT, MUTED = '#101010', '#d1d4dc', '#999da8'
 
 
+class HourlyHistoryUnavailable(ValueError):
+    """The verified provider did not return enough bars for an hourly chart."""
+
+
 async def get_hourly_candles():
     # Dedicated on-demand OANDA request: never label a fallback as OANDA.
     closed, forming = await fetch_tradingview('1h', max_closed=CANDLE_COUNT)
     candles = (closed + ([forming] if forming else []))[-CANDLE_COUNT:]
     if len(candles) != CANDLE_COUNT:
-        raise ValueError('Twenty verified hourly candles are unavailable')
+        raise HourlyHistoryUnavailable('Twenty verified hourly candles are unavailable')
     return candles, forming is not None
 
 
