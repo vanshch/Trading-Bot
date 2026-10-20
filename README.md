@@ -170,7 +170,7 @@ python -m unittest discover -s tests -p test_manual_charts.py
 python -m unittest discover -s tests -p test_hourly_volume.py
 ```
 
-These six suites contain 78 offline tests. CI runs Python 3.10/3.12, plus an
+These six suites contain 79 offline tests. CI runs Python 3.10/3.12, plus an
 optional-provider dependency job and eight Linux harness checks. On Linux/WSL:
 
 ```sh

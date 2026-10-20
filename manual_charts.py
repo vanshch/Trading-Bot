@@ -14,15 +14,23 @@ async def request_chart(context, kind, timeframe):
     """Reserve before task creation so repeated taps never queue captures."""
     state = context.application.bot_data
     if state.get('manual_chart_busy'):
-        await _send_notice(context.bot, 'A chart is already being prepared. Please wait.')
+        _schedule(context.application, _send_notice(
+            context.bot, 'A chart is already being prepared. Please wait.'))
         return
     state['manual_chart_busy'] = True
     task = deliver_chart(context.bot, state, kind, timeframe, announce=True)
     try:
-        context.application.create_task(task)
+        _schedule(context.application, task)
+    except BaseException:
+        state['manual_chart_busy'] = False
+        raise
+
+
+def _schedule(application, task):
+    try:
+        application.create_task(task)
     except BaseException:
         task.close()
-        state['manual_chart_busy'] = False
         raise
 
 
@@ -78,9 +86,11 @@ async def deliver_chart(bot, state, kind, timeframe, *, announce=False):
         if phase == 'delivery':
             message = ('Chart delivery could not be confirmed. It may still arrive; '
                        'please request it again if needed.')
-        elif kind == 'hourly' and isinstance(exc, (HourlyHistoryUnavailable, asyncio.TimeoutError)):
+        elif kind == 'hourly' and isinstance(exc, HourlyHistoryUnavailable):
             message = ('Verified OANDA hourly data is temporarily unavailable. '
                        'Please try /chart1h again shortly. No fallback volume was used.')
+        elif kind == 'hourly' and isinstance(exc, asyncio.TimeoutError):
+            message = 'Fetching or rendering the 1H chart timed out. Please try /chart1h again.'
         elif kind == 'hourly':
             message = 'The 1H chart could not be prepared or delivered. Please try /chart1h again.'
         else:

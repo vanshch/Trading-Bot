@@ -95,6 +95,9 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         try:
             await manual.request_chart(context, 'hourly', '1h')
             await manual.request_chart(context, 'screenshot', '15m')
+            self.assertEqual(len(pending), 2)
+            context.bot.send_message.assert_not_awaited()
+            await pending.pop()
             self.assertEqual(len(pending), 1)
             self.assertIn('already', context.bot.send_message.call_args.args[1])
         finally:
@@ -206,6 +209,14 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await pending.pop()
         self.assertFalse(context.application.bot_data['manual_chart_busy'])
+
+    async def test_hourly_timeout_does_not_claim_data_was_unavailable(self):
+        context, _ = self.context()
+        with patch.object(manual, 'capture_hourly_chart', AsyncMock(side_effect=asyncio.TimeoutError())), \
+                patch.object(manual.asyncio, 'sleep', AsyncMock()):
+            await manual.deliver_chart(context.bot, context.application.bot_data, 'hourly', '1h')
+        self.assertIn('Fetching or rendering', context.bot.send_message.call_args.args[1])
+        context.bot.send_photo.assert_not_awaited()
 
 
 class HandlerTests(unittest.IsolatedAsyncioTestCase):
