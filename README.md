@@ -206,20 +206,20 @@ Recorded deployment is GCE `trade-bot-vm`, systemd `xauusd-bot.service`, user
 The service has `MemoryHigh=90M`, `MemoryMax=120M`. Pillow **12.3.0** is supplied
 through a service PYTHONPATH overlay, which direct maintenance commands must use.
 
-**Last recorded production verification: 20 October 2026.** PR #9 is deployed,
-including the hourly volume alarm (default OFF) and PR #5's removal of the manual
-30s cooldown. TradingView and automatic photos remain enabled; primary monitoring
-is 15m, with an independent H1 task when the volume alarm is armed. Send `/start`
-and tap **🔊 1H Volume ≥120% MA20: OFF** to arm it. See [progress](progress.md) and
-[deployment evidence](docs/hourly-volume-deployment-20261020.md) for exact hashes,
-observation times, limits, state preservation and the verified rollback backup.
-Documentation commits do not establish a newer runtime observation.
+**Last recorded production verification: 20 October 2026, 03:40:52 UTC.**
+PR #11 is deployed, including resilient callback acknowledgments, background
+chart notices and bounded hourly-history retries. All nine modules/two manifests
+matched merged release `0861d91`; saved alerts/environment were preserved.
+Desktop Computer Use verified **current → tele_alert**: `/start`, Status,
+Live & Closed Bar, H1 chart and Screenshot Now. WARP remains stopped/disabled;
+do not re-enable it without user instruction. Package/configuration remain for
+rollback. See [release/desktop/rollback evidence](docs/telegram-resilience-deployment-20261020.md)
+and [WARP maintenance](docs/warp-disabled-validation-20261020.md).
 
-WARP is temporarily stopped/disabled for user command testing as of 20 October
-03:18:35 UTC; its package/configuration remain installed. The bot remained on its
-original PID and immediate host paging/I/O stalls eased. Do not re-enable WARP
-without user instruction; see [verification and rollback](docs/warp-disabled-validation-20261020.md).
-Command/photo/device acceptance and sustained-load verification remain pending.
+TradingView/automatic photos remain enabled, monitoring stays 15m. The independent
+H1 alarm defaults OFF; the user's current setting is ON (see progress). Desktop
+success does not establish separate-phone receipt, live qualifying H1 delivery or
+sustained-load reliability. Documentation commits are not runtime observations.
 
 Polling errors, long-run memory pressure, durable delivery-event persistence/retry and a
 continuous OANDA market-session soak remain open. One-shot state is consumed

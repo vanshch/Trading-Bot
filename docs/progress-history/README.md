@@ -13,3 +13,4 @@ Earlier primary-checkout snapshots and their original index are preserved verbat
 | [Primary handoff before reconciliation](primary-preserved-20261018/primary-progress-before-reconciliation.md) | Verbatim older primary state, read only as historical evidence. |
 | [20 October before hourly-volume rollout closeout](2026-10-20-003036-before-hourly-volume-closeout.md) | Verbatim branch-testing handoff before authorized merge/deployment; superseded by current progress. |
 | [20 October before Telegram resilience fixes](2026-10-20-033100-before-telegram-resilience.md) | Verbatim WARP-disabled production handoff before the reviewed fixes; testing and rollout pending. |
+| [20 October before resilience rollout closeout](2026-10-20-034052-before-resilience-closeout.md) | Verbatim PR #11 pre-deployment handoff; superseded by the deployment and desktop acceptance report. |

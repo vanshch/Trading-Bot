@@ -3,7 +3,7 @@
 The user authorized temporarily removing WARP from operation while testing basic
 bot commands. `warp-svc.service` is **stopped and disabled**. The package and its
 configuration remain installed for rollback. Do not automatically re-enable it;
-the user's command/device testing is pending.
+subsequent desktop acceptance is recorded in [the resilience release report](telegram-resilience-deployment-20261020.md).
 
 ## Action and verification
 
@@ -43,8 +43,9 @@ restart was performed. Alert-delivery retry and callback weaknesses remain open.
 ## User acceptance and rollback
 
 Try `/start`, `/status`, `/candle`, `/chart1h` and `/screenshot`; check response
-latency and device receipt. Live provider/photo behavior remains pending until
-actually observed. An hourly-volume alarm had switched OFF after processing the
+latency and device receipt. These command/chart paths were subsequently verified
+on Telegram Desktop after PR #11 deployment; see the release report. Separate
+phone and live qualifying-alert receipt remain unconfirmed. An hourly-volume alarm had switched OFF after processing the
 03:00 UTC close before this maintenance; its device receipt remains unconfirmed.
 
 Only when the user requests restoration:
