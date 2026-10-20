@@ -5,6 +5,7 @@ from functools import wraps
 from typing import Any, Callable, List
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import BadRequest, NetworkError
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -314,7 +315,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not query:
         return
 
-    await query.answer()
+    try:
+        await query.answer()
+    except BadRequest as exc:
+        # The click is still actionable even if its acknowledgment expired.
+        if not any(marker in str(exc).lower() for marker in (
+            "query is too old", "query id is invalid",
+        )):
+            raise
+        logger.warning("Callback acknowledgment expired; processing authorized action")
+    except NetworkError as exc:
+        logger.warning("Callback acknowledgment unavailable (%s); processing authorized action",
+                       type(exc).__name__)
     data = query.data
 
     if data == "btn_screenshot":
@@ -547,6 +559,17 @@ async def post_init(app: Application):
     except Exception as e:
         logger.warning(f"Failed to send startup message: {e}")
 
+async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    # PTB already retries receive polling. Logging must not dump credential-bearing
+    # request URLs, update bodies or exception payloads, nor claim a send succeeded.
+    error = context.error
+    operation = "polling" if update is None else "update"
+    if isinstance(error, NetworkError) and not isinstance(error, BadRequest):
+        logger.warning("Telegram %s network failure (%s)", operation, type(error).__name__)
+    else:
+        logger.error("Telegram %s handler failed (%s)", operation, type(error).__name__)
+
+
 def main():
     logger.info("Starting XAU/USD Telegram Bot daemon with multi-alert engine...")
     app = (
@@ -556,6 +579,7 @@ def main():
         .build()
     )
 
+    app.add_error_handler(telegram_error_handler)
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("alert", alert_command))
     app.add_handler(CommandHandler("alerts", alerts_list_command))

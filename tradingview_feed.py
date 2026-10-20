@@ -96,5 +96,5 @@ async def fetch_tradingview(timeframe="15m", max_closed=2):
         return await asyncio.wait_for(request(), timeout=REQUEST_TIMEOUT_SECONDS)
     except Exception as exc:
         # Provider exceptions may contain URLs; retain only the exception type.
-        logger.warning("TradingView feed unavailable (%s); using fallback", type(exc).__name__)
+        logger.warning("TradingView feed unavailable (%s); no verified history returned", type(exc).__name__)
         return [], None

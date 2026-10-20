@@ -33,6 +33,8 @@ These are durable lessons for the active candle alert bot. Current architecture 
 
 - Distinguish candle eligibility, pre-send dispatch, Telegram API acceptance and device receipt. Persist credential-safe message IDs/timestamps and delivery outcomes; consuming one-shot state before a failed send needs durable retry handling.
 - Classify Telegram receive-polling failures separately from sends. Recover journal retention gaps from rotated system logs before claiming full-run coverage; memory high-threshold events are pressure, distinct from OOM kills.
+- A failed callback acknowledgment need not invalidate its authorized action. Handle only known expiry/transient failures, keep chart preparation independent of informational notices, and never retry uncertain photo sends as though failure proves nondelivery. Bounded retries complement provider validation; they do not replace it.
+- Attribute host stalls using interval page faults, active swap I/O, disk latency and PSI alongside per-service memory. Occupied swap alone does not prove current thrashing. Compare before/after an authorized service stop; preserve its timeout outcome and distinguish immediate relief from sustained-load or device acceptance.
 
 ## Validate the relevant behavior
 - Keep automated checks offline with mocks/synthetic candles. Use active bot suites; disabled legacy YouTube tests are not evidence of current bot health.

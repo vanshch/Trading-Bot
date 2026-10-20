@@ -148,6 +148,16 @@ insufficient history is rejected. Its forming bar is labeled, and OANDA volume
 means tick counts, not exchange-traded contracts. H1 renders locally with Pillow;
 it does not reproduce saved TradingView drawings or indicators.
 
+Manual chart preparation notices run in the background and cannot prevent a
+capture if Telegram is unavailable. Informational notices have two five-second
+send attempts, separated by one second. Unavailable verified hourly history gets
+one retry within a 55-second capture budget. Invalid chart data is rejected;
+uncertain photo sends are not retried. Error messages distinguish provider
+unavailability from unconfirmed photo delivery. Expired/transiently failed button
+acknowledgments allow the authorized action to continue; unrelated errors reach
+the registered, credential-safe Telegram error handler. PTB retains its own
+receive-polling recovery; these changes do not guarantee external connectivity.
+
 ## Validation
 
 ```sh
@@ -160,7 +170,7 @@ python -m unittest discover -s tests -p test_manual_charts.py
 python -m unittest discover -s tests -p test_hourly_volume.py
 ```
 
-These six suites contain 70 offline tests. CI runs Python 3.10/3.12, plus an
+These six suites contain 78 offline tests. CI runs Python 3.10/3.12, plus an
 optional-provider dependency job and eight Linux harness checks. On Linux/WSL:
 
 ```sh
@@ -205,7 +215,13 @@ and tap **🔊 1H Volume ≥120% MA20: OFF** to arm it. See [progress](progress.
 observation times, limits, state preservation and the verified rollback backup.
 Documentation commits do not establish a newer runtime observation.
 
-Polling errors, memory pressure, durable delivery-event persistence/retry and a
+WARP is temporarily stopped/disabled for user command testing as of 20 October
+03:18:35 UTC; its package/configuration remain installed. The bot remained on its
+original PID and immediate host paging/I/O stalls eased. Do not re-enable WARP
+without user instruction; see [verification and rollback](docs/warp-disabled-validation-20261020.md).
+Command/photo/device acceptance and sustained-load verification remain pending.
+
+Polling errors, long-run memory pressure, durable delivery-event persistence/retry and a
 continuous OANDA market-session soak remain open. One-shot state is consumed
 before sending and there is no durable outbox. A recurring market-hours gate is not implemented. Live qualifying H1 alert
 delivery/device receipt remains pending user testing. Experiments remain

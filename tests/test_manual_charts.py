@@ -2,9 +2,10 @@ import asyncio
 import unittest
 from io import BytesIO
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from PIL import Image
+from telegram.error import BadRequest, TimedOut
 import bot
 import config
 import hourly_chart as chart
@@ -154,16 +155,99 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
                 await manual.deliver_chart(context.bot, context.application.bot_data, 'hourly', '1h')
         self.assertFalse(context.application.bot_data['manual_chart_busy'])
 
-    async def test_preparation_notice_failure_releases_reservation(self):
+    async def test_preparation_notice_failure_does_not_drop_chart_request(self):
         context, pending = self.context()
         context.bot.send_message.side_effect = OSError()
-        with self.assertRaises(OSError):
+        with patch.object(manual, 'capture_hourly_chart', AsyncMock(return_value=(b'png', 'caption'))):
             await manual.request_chart(context, 'hourly', '1h')
+            self.assertEqual(len(pending), 1)
+            await pending.pop()
+        context.bot.send_photo.assert_awaited_once()
         self.assertFalse(context.application.bot_data['manual_chart_busy'])
         self.assertFalse(pending)
 
+    async def test_unavailable_hourly_history_retries_once_without_fallback(self):
+        context, _ = self.context()
+        with patch.object(manual, 'capture_hourly_chart', AsyncMock(side_effect=[
+                chart.HourlyHistoryUnavailable(), (b'png', 'caption')])) as capture, \
+                patch.object(manual.asyncio, 'sleep', AsyncMock()):
+            await manual.deliver_chart(context.bot, context.application.bot_data, 'hourly', '1h')
+        self.assertEqual(capture.await_count, 2)
+        context.bot.send_photo.assert_awaited_once()
+        context.bot.send_message.assert_not_awaited()
+
+    async def test_failure_notice_retries_and_names_unavailable_provider(self):
+        context, _ = self.context()
+        context.bot.send_message.side_effect = [TimedOut('private-token'), None]
+        with patch.object(manual, 'capture_hourly_chart', AsyncMock(side_effect=chart.HourlyHistoryUnavailable())), \
+                patch.object(manual.asyncio, 'sleep', AsyncMock()), \
+                self.assertLogs('xauusd_bot', 'WARNING') as logs:
+            await manual.deliver_chart(context.bot, context.application.bot_data, 'hourly', '1h')
+        self.assertEqual(context.bot.send_message.await_count, 2)
+        self.assertIn('temporarily unavailable', context.bot.send_message.call_args.args[1])
+        self.assertNotIn('private-token', ' '.join(logs.output))
+        self.assertFalse(context.application.bot_data['manual_chart_busy'])
+
+    async def test_invalid_chart_data_not_retried_and_photo_timeout_not_misreported(self):
+        context, _ = self.context()
+        with patch.object(manual, 'capture_hourly_chart', AsyncMock(side_effect=ValueError('invalid OHLC'))) as capture:
+            await manual.deliver_chart(context.bot, context.application.bot_data, 'hourly', '1h')
+        capture.assert_awaited_once()
+        context.bot.send_photo.side_effect = TimedOut()
+        with patch.object(manual, 'capture_hourly_chart', AsyncMock(return_value=(b'png', 'caption'))):
+            await manual.deliver_chart(context.bot, context.application.bot_data, 'hourly', '1h')
+        context.bot.send_photo.assert_awaited_once()
+        self.assertIn('delivery could not be confirmed', context.bot.send_message.call_args.args[1])
+
+    async def test_notice_cancellation_releases_busy(self):
+        context, pending = self.context()
+        context.bot.send_message.side_effect = asyncio.CancelledError()
+        await manual.request_chart(context, 'hourly', '1h')
+        with self.assertRaises(asyncio.CancelledError):
+            await pending.pop()
+        self.assertFalse(context.application.bot_data['manual_chart_busy'])
+
 
 class HandlerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_application_registers_error_handler(self):
+        app = MagicMock()
+        builder = MagicMock()
+        builder.token.return_value.post_init.return_value.build.return_value = app
+        with patch.object(bot, 'ApplicationBuilder', return_value=builder):
+            bot.main()
+        app.add_error_handler.assert_called_once_with(bot.telegram_error_handler)
+        app.run_polling.assert_called_once_with(drop_pending_updates=True)
+
+    async def test_expired_or_timed_out_acknowledgment_still_executes_authorized_action(self):
+        for error in [BadRequest('Query is too old and response timeout expired or query id is invalid'),
+                      TimedOut('private-token')]:
+            query = SimpleNamespace(data='btn_hourly_chart', answer=AsyncMock(side_effect=error))
+            update = SimpleNamespace(effective_user=SimpleNamespace(id=config.ALLOWED_USER_ID), callback_query=query)
+            with patch.object(bot, 'request_chart', AsyncMock()) as request, \
+                    self.assertLogs('xauusd_bot', 'WARNING') as logs:
+                await bot.button_callback(update, SimpleNamespace())
+            request.assert_awaited_once()
+            self.assertNotIn('private-token', ' '.join(logs.output))
+
+    async def test_unrelated_bad_request_is_not_swallowed(self):
+        query = SimpleNamespace(data='btn_hourly_chart', answer=AsyncMock(side_effect=BadRequest('other failure')))
+        update = SimpleNamespace(effective_user=SimpleNamespace(id=config.ALLOWED_USER_ID), callback_query=query)
+        with patch.object(bot, 'request_chart', AsyncMock()) as request:
+            with self.assertRaises(BadRequest):
+                await bot.button_callback(update, SimpleNamespace())
+        request.assert_not_awaited()
+
+    async def test_error_handler_classifies_polling_and_unexpected_errors_without_payloads(self):
+        for update, error, level, expected in [
+            (None, TimedOut('private-token'), 'WARNING', 'polling network failure'),
+            (object(), BadRequest('private-token'), 'ERROR', 'update handler failed'),
+            (object(), RuntimeError('private-token'), 'ERROR', 'update handler failed'),
+        ]:
+            with self.assertLogs('xauusd_bot', level) as logs:
+                await bot.telegram_error_handler(update, SimpleNamespace(error=error))
+            self.assertIn(expected, ' '.join(logs.output))
+            self.assertNotIn('private-token', ' '.join(logs.output))
+
     async def test_buttons_and_commands_use_auth_gate(self):
         callbacks = {b.callback_data for row in bot.get_keyboard().inline_keyboard for b in row}
         self.assertTrue({'btn_screenshot', 'btn_hourly_chart'}.issubset(callbacks))
