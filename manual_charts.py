@@ -74,9 +74,8 @@ async def deliver_chart(bot, state, kind, timeframe, *, announce=False):
         else:
             # The automatic screenshot flag does not disable an explicit request.
             image = await asyncio.wait_for(capture_chart(configured_settings(), timeframe), timeout=CAPTURE_TIMEOUT)
-            caption = (f'OANDA XAU/USD · {timeframe} · Requested TradingView screenshot\n'
-                       f'Captured: {datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S} UTC\n'
-                       'Visual context; may include a forming candle.')
+            caption = (f'📸 OANDA XAU/USD · {timeframe} · TradingView snapshot\n'
+                       f'Captured: {datetime.now(timezone.utc):%H:%M:%S UTC} (may include forming candle)')
             filename = 'tradingview-xauusd.png'
         phase = 'delivery'
         await asyncio.wait_for(bot.send_photo(chat_id=config.ALLOWED_USER_ID,

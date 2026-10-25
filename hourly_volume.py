@@ -69,18 +69,18 @@ async def check_hourly_volume(bot, manager, *, started_at):
     ):
         return
     close_time = datetime.fromtimestamp(result["timestamp"], timezone.utc).strftime(
-        "%Y-%m-%d %H:%M UTC"
+        "%H:%M UTC"
     )
     percent = (result["volume"] / result["average"] - 1) * 100
     await bot.send_message(
         chat_id=config.ALLOWED_USER_ID,
         text=(
             "🔊 *XAU/USD [1H] High-volume candle occurred!*\n"
-            f"• *Candle closed*: `{close_time}`\n"
-            f"• *OANDA tick volume*: `{result['volume']:,.0f}`\n"
-            f"• *Previous 20 closed hours' average*: `{result['average']:,.2f}`\n"
-            f"• *Above average*: `{percent:.2f}%` (required: at least 20%)\n"
-            "ℹ️ One-shot complete: hourly volume alarm is now OFF."
+            f"• *Closed*: `{close_time}`\n"
+            f"• *Tick Volume*: `{result['volume']:,.0f}`\n"
+            f"• *20h Average*: `{result['average']:,.1f}`\n"
+            f"• *Above Average*: `+{percent:.2f}%` (threshold: 20.00%)\n\n"
+            "ℹ️ _Alert triggered & disarmed (one-shot)._"
         ),
         parse_mode="Markdown",
     )

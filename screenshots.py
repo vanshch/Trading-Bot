@@ -127,11 +127,9 @@ async def send_alert_chart(bot, timeframe: str, candle_time: str, feed_source: s
         image = await asyncio.wait_for(capture_chart(settings, timeframe), timeout=CAPTURE_TIMEOUT)
         captured_at = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
         caption = (
-            f"OANDA XAU/USD · {timeframe} · TradingView visual context\n"
-            f"Alert candle close: {candle_time}\n"
-            f"Captured: {captured_at} (may include a forming candle)\n"
-            f"Alert feed: {feed_source}\n"
-            "Chart quotes may differ from the alert feed."
+            f"📸 OANDA XAU/USD · {timeframe} · TradingView snapshot\n"
+            f"Alert close: {candle_time} · Captured: {captured_at}\n"
+            f"Feed: {feed_source}"
         )
         # Plain text avoids Markdown injection; conservative limit covers UTF-16 too.
         await asyncio.wait_for(bot.send_photo(

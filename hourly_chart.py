@@ -133,9 +133,7 @@ async def capture_hourly_chart():
     # Keep PNG compression/drawing off the scheduler's event loop.
     png = await asyncio.to_thread(render_hourly_chart, candles, forming)
     last_start = datetime.fromtimestamp(candles[-1]['start_timestamp'], timezone.utc)
-    caption = (f'OANDA XAU/USD · 1H · latest 20 candles\n'
-               f'Last bar starts: {last_start:%Y-%m-%d %H:%M} UTC '
-               f"({'forming' if forming else 'closed'})\n"
-               'Rendered from verified tvkit OHLC and OANDA tick volume. '
-               'Snapshot; tick counts are not exchange-traded volume.')
+    caption = (f'📊 OANDA XAU/USD · 1H · 20 bars\n'
+               f'Last bar starts: {last_start:%Y-%m-%d %H:%M} UTC ({"forming" if forming else "closed"})\n'
+               f'OANDA tick volume.')
     return png, caption

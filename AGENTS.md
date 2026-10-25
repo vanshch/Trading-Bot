@@ -47,10 +47,22 @@
 
 ### Production VM Management
 - Check status: `systemctl status xauusd-bot.service`.
-- Recent logs: `journalctl -u xauusd-bot.service -n 100 --no-pager`.
+- Recent logs: `journalctl -u xauusd-bot.service -n 20 --no-pager`.
 - Follow logs: `journalctl -u xauusd-bot.service -f`.
 - Inspect memory/pressure: `systemctl show xauusd-bot.service -p MemoryCurrent -p MemoryHigh -p MemoryMax` and its cgroup counters.
 - Restart only within authorized deployment/operations work and respecting all user pauses: `sudo systemctl restart xauusd-bot.service`.
+
+#### Gemini Models Remote Observability Directive
+When inspecting cloud bot health/logs with Gemini models:
+- **Single Batched Command**: Do NOT execute serial micro-probes (`ps`, `status`, multiple `journalctl` calls). Batch health checks into one atomic SSH command.
+- **Bounded Log Dumps**: Never dump unbounded repetitive logs (`-n 100+` triggers API loop detection filters). Use `-p warning..emerg` for anomalies and `-n 15` max for recent logs.
+- **Synchronous Execution**: Set `WaitMsBeforeAsync: 9000` so remote inspection commands execute synchronously (~5s) without async task fragmentation.
+- **Canonical Windows SSH Recipe**:
+  ```powershell
+  $cmd = 'systemctl status xauusd-bot.service --no-pager; echo "=== ANOMALIES ==="; journalctl -u xauusd-bot.service -p warning..emerg --since today --no-pager; echo "=== RECENT LOGS ==="; journalctl -u xauusd-bot.service -n 15 --no-pager'
+  $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($cmd))
+  gcloud compute ssh trade-bot-vm --zone=us-central1-a --project=true-ion-434206-f2 --quiet --command "echo $b64 | base64 -d | bash"
+  ```
 
 ### Production Code Deployment
 1. Check current `progress.md`, the complete reviewed revision, rollback evidence, and user authorization; never deploy stale or dirty source or override a requested pause. Checkout reconciliation does not authorize deployment.
@@ -67,6 +79,7 @@
 - **Momentum**: fire fresh two-green/two-red sequences only; suppress third/later candles of an ongoing streak. Deduplicate by candle timestamp and turn one-shot settings off after triggering.
 - **Persistence**: commit alert/settings changes to `data/alerts.json` through a same-directory temporary file and atomic replacement. Missing/corrupt JSON recovers safely to defaults.
 - **Charts**: deliver triggered text first, then at most one Browserless photo per alerted candle. Quiet candles do not capture charts. Capture/photo failures must leave text delivery intact. Screenshots can contain forming bars and are visual context, not the authoritative candle feed. Browserless runs Chromium outside the VM.
+- **Media & context efficiency**: save screenshots to disk and reference via `file:///` links. Never return raw Base64 image payloads in tool outputs or session history. Clicking file links opens the image in T3 Code's right-side preview pane.
 - **Manual charts**: explicit screenshots and 20-candle hourly tick-volume images use background tasks and one shared in-flight reservation, with no timed cooldown. Keep verified raw OANDA data/source and native start timestamps; reject insufficient history rather than substituting fallback volume. Forming bars may appear only as labeled visual context. Do not change scheduler timeframe/state or saved alerts from these requests.
 - **Formatting/secrets**: respect the actual Telegram parse mode and entity/payload limits; escape dynamic text where needed and use monospace prices. Never log tokens, private environment values, authenticated URLs, or private profile data. Keep HTTPX request logs suppressed because Telegram URLs contain credentials.
 - **Hourly volume**: opt-in one-shot alarm at closed H1 volume ≥1.20× the preceding 20 closed OANDA H1 bars' mean, excluding the candidate. Ignore forming/pre-arm/pre-restart/equal/older closes; no fallback volume. Keep its state/scheduler separate from price/momentum; failed data retains arming. Consult `progress.md` for merge/deployment status and authorization.

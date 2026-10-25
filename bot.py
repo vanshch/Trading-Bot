@@ -67,19 +67,18 @@ def calculate_next_wait_seconds(timeframe: str) -> int:
 @authorized_only
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
-        "🟡 *XAU/USD Multi-Alert Monitor*\n"
-        "Active monitoring engine with price level rejection & candle momentum alerts.\n\n"
-        "💡 *Available Commands:*\n"
-        "• `/alert <price>` — Set level rejection & false breakout alert (e.g. `/alert 2740`)\n"
-        "• `/alert 2green` — Toggle 2 consecutive green candles alert (On/Off)\n"
-        "• `/alert 2red` — Toggle 2 consecutive red candles alert (On/Off)\n"
-        "• `/alerts` — List and manage pending price alerts\n"
-        "• `/clearalerts` — Remove all pending price alerts\n"
-        "• `/candle` — View live forming bar and last closed bar\n"
-        "• `/screenshot` — Capture the TradingView screenshot now\n"
-        "• `/chart1h` — Latest 20 hourly candles with tick volume\n"
-        "• `/volume1h` — Toggle one-shot 1H volume ≥120% of previous 20 hours' average\n"
-        "• `/status` — View current bot and alert settings"
+        "🟡 *XAU/USD Alert Monitor*\n"
+        "Real-time gold level rejection & momentum alerts.\n\n"
+        "💡 *Quick Commands:*\n"
+        "• `/alert <price>` — Set level alert (e.g. `/alert 2740`)\n"
+        "• `/alert 2green` | `/alert 2red` — Toggle 2-candle momentum\n"
+        "• `/alerts` — View & manage active alerts\n"
+        "• `/clearalerts` — Cancel all price alerts\n"
+        "• `/candle` — Live forming & last closed bar\n"
+        "• `/chart1h` — 20-bar 1H chart with tick volume\n"
+        "• `/screenshot` — Live TradingView snapshot\n"
+        "• `/volume1h` — Toggle 1H volume spike alarm\n"
+        "• `/status` — Bot status & active settings"
     )
     if update.message:
         await update.message.reply_text(
@@ -97,11 +96,11 @@ async def alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not args:
         await update.message.reply_text(
             "❌ *Usage:*\n"
-            "• `/alert 2740.00` (Set Level Rejection & False Breakout alert)\n"
-            "• `/alert 2710.00 support` (Explicit support level)\n"
-            "• `/alert 2750.00 resistance` (Explicit resistance level)\n"
-            "• `/alert 2green` (Toggle 2-green momentum alert)\n"
-            "• `/alert 2red` (Toggle 2-red momentum alert)",
+            "• `/alert 2740` (Level Rejection alert)\n"
+            "• `/alert 2710 support` (Explicit support)\n"
+            "• `/alert 2750 resistance` (Explicit resistance)\n"
+            "• `/alert 2green` (Toggle 2-green momentum)\n"
+            "• `/alert 2red` (Toggle 2-red momentum)",
             parse_mode="Markdown"
         )
         return
@@ -111,11 +110,9 @@ async def alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_enabled = alert_manager.toggle_setting("two_green_candles")
         status_str = "ON 🟢" if is_enabled else "OFF ⚪"
         await update.message.reply_text(
-            f"🟢🟢 *2 Consecutive Green Candles Alert:* `{status_str}`\n"
-            f"• *Timeframe*: `{config.state.current_timeframe}`\n"
-            f"• *Mode*: One-shot (switches to OFF after 1 notification)\n"
-            f"• *Streak Guard*: Only alerts once on a fresh 2-green sequence.\n"
-            f"{'Alert will trigger when two green candles close consecutively, then turn OFF.' if is_enabled else 'Alert is now muted.'}",
+            f"🟢🟢 *2-Green Alert:* `{status_str}`\n"
+            f"• *Timeframe*: `{config.state.current_timeframe}` (one-shot)\n"
+            f"{'Will trigger when two green candles close consecutively.' if is_enabled else 'Alert muted.'}",
             reply_markup=get_keyboard(),
             parse_mode="Markdown"
         )
@@ -124,11 +121,9 @@ async def alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_enabled = alert_manager.toggle_setting("two_red_candles")
         status_str = "ON 🔴" if is_enabled else "OFF ⚪"
         await update.message.reply_text(
-            f"🔴🔴 *2 Consecutive Red Candles Alert:* `{status_str}`\n"
-            f"• *Timeframe*: `{config.state.current_timeframe}`\n"
-            f"• *Mode*: One-shot (switches to OFF after 1 notification)\n"
-            f"• *Streak Guard*: Only alerts once on a fresh 2-red sequence.\n"
-            f"{'Alert will trigger when two red candles close consecutively, then turn OFF.' if is_enabled else 'Alert is now muted.'}",
+            f"🔴🔴 *2-Red Alert:* `{status_str}`\n"
+            f"• *Timeframe*: `{config.state.current_timeframe}` (one-shot)\n"
+            f"{'Will trigger when two red candles close consecutively.' if is_enabled else 'Alert muted.'}",
             reply_markup=get_keyboard(),
             parse_mode="Markdown"
         )
@@ -165,13 +160,11 @@ async def alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     offset_note = f"\n• *Twelve Data Offset*: `{config.OANDA_PRICE_OFFSET:+.2f}`" if latest and latest.get("source", "").startswith("Twelve Data") and config.OANDA_PRICE_OFFSET != 0.0 else ""
 
     msg = (
-        f"🎯 *Level Rejection Alert #{alert['id']} Created* {side_icon}\n"
+        f"🎯 *Level Alert #{alert['id']} Set* {side_icon}\n"
         f"• *Level*: `${alert['target_price']:,.2f}` (`{side_display}`)\n"
-        f"• *Current Price*: `{current_price_str}`{offset_note}\n"
-        f"• *Evaluation*: Every `{config.state.current_timeframe}` candle close\n\n"
-        f"⚡ *Wick Touch*: Fires if a candle's wick touches `${alert['target_price']:,.2f}` and closes back inside.\n"
-        f"🔄 *False Breakout*: If broken by body, fires ONLY if the immediate next candle closes in the opposite direction outside the zone.\n"
-        f"❌ *Zone Breach*: If broken by body and next candle does not reject, zone is breached and alert is discarded silently."
+        f"• *Current*: `{current_price_str}`{offset_note}\n"
+        f"• *Timeframe*: `{config.state.current_timeframe}` close\n"
+        f"_Triggers on wick touch or sweep rejection._"
     )
     await update.message.reply_text(msg, reply_markup=get_keyboard(), parse_mode="Markdown")
 
@@ -199,15 +192,13 @@ def build_alerts_list_view():
     two_red_status = "🔴 ON (One-Shot)" if alert_manager.is_setting_enabled("two_red_candles") else "⚪ OFF"
 
     header = (
-        f"⚙️ *Momentum Alert Settings:*\n"
-        f"• 2-Green Alert: `{two_green_status}`\n"
-        f"• 2-Red Alert: `{two_red_status}`\n"
-        f"• {SETTING_LABEL}: `{'ON (One-Shot)' if alert_manager.is_hourly_volume_enabled() else 'OFF'}`\n"
-        f"• Timeframe: `{config.state.current_timeframe}`\n\n"
+        f"⚙️ *Alert Settings [{config.state.current_timeframe}]:*\n"
+        f"• 2-Green: `{two_green_status}` · 2-Red: `{two_red_status}`\n"
+        f"• 1H Vol Spike: `{'ON (One-Shot)' if alert_manager.is_hourly_volume_enabled() else 'OFF'}`\n\n"
     )
 
     if not alerts:
-        text = header + "🎯 *Active Price Alerts: None*\nUse `/alert <price>` to set a level rejection alert."
+        text = header + "🎯 *Active Price Alerts: None*\nUse `/alert <price>` to set an alert."
         markup = get_keyboard()
         return text, markup
 
@@ -215,8 +206,8 @@ def build_alerts_list_view():
     buttons = []
     for a in alerts:
         side_tag = a.get("side", "resistance").upper()
-        state_tag = "ACTIVE" if a.get("state") == "ACTIVE" else "⏳ AWAITING 2ND BAR"
-        text += f"• *#{a['id']}*: `{side_tag}` `${a['target_price']:,.2f}` — _{state_tag}_ (Set at {a['created_at']})\n"
+        state_tag = "ACTIVE" if a.get("state") == "ACTIVE" else "⏳ AWAITING BAR 2"
+        text += f"• *#{a['id']}*: `{side_tag}` `${a['target_price']:,.2f}` — _{state_tag}_\n"
         buttons.append([
             InlineKeyboardButton(f"❌ Cancel #{a['id']} (${a['target_price']:,.2f})", callback_data=f"cancel_alert_{a['id']}")
         ])
@@ -242,7 +233,7 @@ async def build_candle_view() -> str:
         parts.append(feed.format_forming_candle_message(forming, tf))
 
     if closed:
-        parts.append(f"🏁 *Last Closed Bar:*\n{feed.format_candle_message(closed, tf)}")
+        parts.append(feed.format_candle_message(closed, tf))
 
     if not parts:
         return "❌ Could not fetch candle data at this moment."
@@ -259,23 +250,21 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def build_status_text() -> str:
     wait_sec = calculate_next_wait_seconds(config.state.current_timeframe)
     m, s = divmod(wait_sec, 60)
-    two_green = "ON (One-Shot)" if alert_manager.is_setting_enabled("two_green_candles") else "OFF"
-    two_red = "ON (One-Shot)" if alert_manager.is_setting_enabled("two_red_candles") else "OFF"
+    two_green = "🟢 ON" if alert_manager.is_setting_enabled("two_green_candles") else "⚪ OFF"
+    two_red = "🔴 ON" if alert_manager.is_setting_enabled("two_red_candles") else "⚪ OFF"
+    vol_status = "🔊 ON" if alert_manager.is_hourly_volume_enabled() else "⚪ OFF"
     active_alerts_cnt = len(alert_manager.get_active_price_alerts())
-    offset_str = f"{config.OANDA_PRICE_OFFSET:+.2f} (Twelve Data only)"
+    offset_str = f" ({config.OANDA_PRICE_OFFSET:+.2f})" if config.OANDA_PRICE_OFFSET != 0.0 else ""
 
     return (
         f"📊 *Bot Status*\n"
-        f"• *Uptime*: {config.state.get_uptime_str()}\n"
-        f"• *Timeframe*: `{config.state.current_timeframe}`\n"
-        f"• *Price Offset*: `{offset_str}`\n"
-        f"• *2-Green Momentum Alert*: `{two_green}`\n"
-        f"• *2-Red Momentum Alert*: `{two_red}`\n"
-        f"• *{SETTING_LABEL}*: `{'ON (One-Shot)' if alert_manager.is_hourly_volume_enabled() else 'OFF'}`\n"
-        "• *Hourly Volume Source*: verified OANDA tick volume; no fallback\n"
-        f"• *Active Price Targets*: `{active_alerts_cnt}`\n"
-        f"• *Feed Source*: {config.state.last_feed_source}\n"
-        f"• *Next Candle Check*: in {m}m {s}s"
+        f"• *Timeframe*: `{config.state.current_timeframe}` · *Next Bar*: in `{m}m {s}s`\n"
+        f"• *Feed*: {config.state.last_feed_source}{offset_str}\n"
+        f"• *Uptime*: {config.state.get_uptime_str()}\n\n"
+        f"🎯 *Active Triggers:*\n"
+        f"• Price Targets: `{active_alerts_cnt} active`\n"
+        f"• 2-Green: `{two_green}` · 2-Red: `{two_red}`\n"
+        f"• 1H Volume ≥120% MA20: `{vol_status}`"
     )
 
 @authorized_only
@@ -290,14 +279,10 @@ async def hourly_chart_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 def toggle_hourly_volume_text() -> str:
     enabled = alert_manager.toggle_hourly_volume()
+    status = "ON" if enabled else "OFF"
     return (
-        f"🔊 *Hourly High-Volume Alarm: {'ON' if enabled else 'OFF'}*\n"
-        "• Triggers after a 1H candle closes with tick volume at least 20% above "
-        "the preceding 20 completed hourly candles' average.\n"
-        "• The evaluated candle is excluded from that average. Small grazes are ignored.\n"
-        "• One-shot: switches OFF after one alert. No alert while the candle is forming.\n"
-        "• Uses verified OANDA tick volume; "
-        "unavailable data leaves it armed. Existing price/momentum timeframe is unchanged."
+        f"🔊 *Hourly High-Volume Alarm: {status}*\n"
+        f"{'Armed: will trigger once when a 1H candle closes with volume ≥120% of 20h average.' if enabled else 'Hourly volume alarm is now muted.'}"
     )
 
 
@@ -377,8 +362,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "btn_main_menu":
         welcome_text = (
-            "🟡 *XAU/USD Multi-Alert Monitor*\n"
-            "Active monitoring engine with price & candle momentum alerts."
+            "🟡 *XAU/USD Alert Monitor*\n"
+            "Real-time gold level rejection & momentum alerts."
         )
         await query.edit_message_text(text=welcome_text, reply_markup=get_keyboard(), parse_mode="Markdown")
 
@@ -432,22 +417,22 @@ async def candle_scheduler(app: Application):
 
                 if t_type == "WICK_TOUCH":
                     alert_msg = (
-                        f"⚡ *XAU/USD [{tf.upper()}] Level Rejection: Wick Touch!*\n"
+                        f"⚡ *WICK REJECTION · XAU/USD [{tf.upper()}]*\n"
                         f"• *Level*: `${target_p:,.2f}` ({side_str})\n"
-                        f"• *Candle Range*: `${latest_candle['low']:,.2f}` ➔ `${latest_candle['high']:,.2f}`\n"
-                        f"• *Close*: `${latest_candle['close']:,.2f}` ({latest_candle['sign']}{latest_candle['pips']:.1f} pips {latest_candle['emoji']}) | `{latest_candle['time_str']}`\n"
-                        f"• *Action*: Wick tested level and body closed strictly inside."
+                        f"• *Closed*: `${latest_candle['close']:,.2f}` ({latest_candle['sign']}{latest_candle['pips']:.1f} pips {latest_candle['emoji']})\n"
+                        f"• *Candle Wick*: `${latest_candle['low']:,.2f}` ➔ `${latest_candle['high']:,.2f}`\n"
+                        f"• *Time*: `{latest_candle['time_str']}`"
                     )
                 else:  # FALSE_BREAKOUT
                     b_candle = alert.get("breakout_candle") or {}
                     b_color = "Green 🟢" if b_candle.get("is_green") else "Red 🔴"
                     r_color = "Green 🟢" if latest_candle.get("is_green") else "Red 🔴"
                     alert_msg = (
-                        f"🔄 *XAU/USD [{tf.upper()}] False Breakout (Sweep) Rejection!*\n"
+                        f"🔄 *SWEEP REJECTION · XAU/USD [{tf.upper()}]*\n"
                         f"• *Level*: `${target_p:,.2f}` ({side_str})\n"
-                        f"• *Bar 1 (Breakout)*: {b_color} close at `${b_candle.get('close', 0):,.2f}` | `{b_candle.get('time_str', 'N/A')}`\n"
-                        f"• *Bar 2 (Rejection)*: Immediate {r_color} close at `${latest_candle['close']:,.2f}` ({latest_candle['sign']}{latest_candle['pips']:.1f} pips {latest_candle['emoji']}) | `{latest_candle['time_str']}`\n"
-                        f"• *Action*: Level was broken with body, but immediate opposite candle rejected back outside zone!"
+                        f"• *Breakout*: {b_color} `${b_candle.get('close', 0):,.2f}` (`{b_candle.get('time_str', 'N/A')}`)\n"
+                        f"• *Rejection*: {r_color} `${latest_candle['close']:,.2f}` ({latest_candle['sign']}{latest_candle['pips']:.1f} pips {latest_candle['emoji']}) (`{latest_candle['time_str']}`)\n"
+                        f"_False breakout confirmed back inside zone._"
                     )
 
                 logger.info(f"Dispatching rejection alert: {alert_msg}")
@@ -473,10 +458,10 @@ async def candle_scheduler(app: Application):
                         last_green_alert_candle_id = candle_id
                         alert_manager.set_setting("two_green_candles", False)
                         green_msg = (
-                            f"🟢🟢 *XAU/USD [{tf.upper()}] Bullish Momentum: 2 Consecutive Green Closes!*\n"
-                            f"• *Bar 1*: `${c1['open']:,.2f}` ➔ `${c1['close']:,.2f}` ({c1['sign']}{c1['pips']:.1f} pips 🟢) | `{c1['time_str']}`\n"
-                            f"• *Bar 2*: `${c2['open']:,.2f}` ➔ `${c2['close']:,.2f}` ({c2['sign']}{c2['pips']:.1f} pips 🟢) | `{c2['time_str']}`\n\n"
-                            f"ℹ️ _One-shot complete: 2-Green alert is now turned OFF._"
+                            f"🟢🟢 *BULLISH MOMENTUM · 2 GREEN [{tf.upper()}]*\n"
+                            f"1️⃣ `${c1['open']:,.2f}` ➔ `${c1['close']:,.2f}` ({c1['sign']}{c1['pips']:.1f} pips 🟢) · `{c1['time_str']}`\n"
+                            f"2️⃣ `${c2['open']:,.2f}` ➔ `${c2['close']:,.2f}` ({c2['sign']}{c2['pips']:.1f} pips 🟢) · `{c2['time_str']}`\n\n"
+                            f"ℹ️ _Alert triggered & disarmed (one-shot)._"
                         )
                         logger.info(f"Dispatching 2-green alert: {green_msg}")
                         await app.bot.send_message(
@@ -503,10 +488,10 @@ async def candle_scheduler(app: Application):
                         last_red_alert_candle_id = candle_id
                         alert_manager.set_setting("two_red_candles", False)
                         red_msg = (
-                            f"🔴🔴 *XAU/USD [{tf.upper()}] Bearish Momentum: 2 Consecutive Red Closes!*\n"
-                            f"• *Bar 1*: `${c1['open']:,.2f}` ➔ `${c1['close']:,.2f}` ({c1['sign']}{c1['pips']:.1f} pips 🔴) | `{c1['time_str']}`\n"
-                            f"• *Bar 2*: `${c2['open']:,.2f}` ➔ `${c2['close']:,.2f}` ({c2['sign']}{c2['pips']:.1f} pips 🔴) | `{c2['time_str']}`\n\n"
-                            f"ℹ️ _One-shot complete: 2-Red alert is now turned OFF._"
+                            f"🔴🔴 *BEARISH MOMENTUM · 2 RED [{tf.upper()}]*\n"
+                            f"1️⃣ `${c1['open']:,.2f}` ➔ `${c1['close']:,.2f}` ({c1['sign']}{c1['pips']:.1f} pips 🔴) · `{c1['time_str']}`\n"
+                            f"2️⃣ `${c2['open']:,.2f}` ➔ `${c2['close']:,.2f}` ({c2['sign']}{c2['pips']:.1f} pips 🔴) · `{c2['time_str']}`\n\n"
+                            f"ℹ️ _Alert triggered & disarmed (one-shot)._"
                         )
                         logger.info(f"Dispatching 2-red alert: {red_msg}")
                         await app.bot.send_message(
@@ -551,7 +536,7 @@ async def post_init(app: Application):
     try:
         await app.bot.send_message(
             chat_id=config.ALLOWED_USER_ID,
-            text="🟢 *XAU/USD Alert Engine is Online*\nAll candle spam is disabled. Use `/alert 2green` or the buttons to place alerts.",
+            text="🟢 *XAU/USD Alert Engine Online*\nReady for commands and alerts. Tap buttons below or use `/alert`.",
             reply_markup=get_keyboard(),
             parse_mode="Markdown"
         )
@@ -571,6 +556,10 @@ async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_T
 
 
 def main():
+    if not config.TELEGRAM_BOT_TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN is missing!")
+        return
+
     logger.info("Starting XAU/USD Telegram Bot daemon with multi-alert engine...")
     app = (
         ApplicationBuilder()

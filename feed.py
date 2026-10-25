@@ -247,16 +247,15 @@ def format_candle_message(candle: Dict[str, Any], timeframe: str) -> str:
     tf_upper = timeframe.upper()
     close_str = f"{candle['close']:,.2f}"
     pips_str = f"{candle['pips']:.1f}"
-    return f"🟡 XAU/USD [{tf_upper}] Close: ${close_str} ({candle['sign']}{pips_str} pips {candle['emoji']}) | {candle['time_str']}"
+    return f"🏁 *Last Closed Bar [{tf_upper}]:* `${close_str}` ({candle['sign']}{pips_str} pips {candle['emoji']}) · `{candle['time_str']}`"
 
 def format_forming_candle_message(candle: Dict[str, Any], timeframe: str) -> str:
     tf_upper = timeframe.upper()
     close_str = f"{candle['close']:,.2f}"
     pips_str = f"{candle['pips']:.1f}"
     return (
-        f"⏳ *XAU/USD [{tf_upper}] Forming Bar (Live)*\n"
+        f"⏳ *Live Forming Bar [{tf_upper}]*\n"
         f"• *Current*: `${close_str}` ({candle['sign']}{pips_str} pips {candle['emoji']})\n"
-        f"• *Open*: `${candle['open']:,.2f}` | *High*: `${candle['high']:,.2f}` | *Low*: `${candle['low']:,.2f}`\n"
-        f"• *Bar Started*: `{candle['start_time']} UTC`"
+        f"• *Range*: `${candle['low']:,.2f}` ➔ `${candle['high']:,.2f}` (Open: `${candle['open']:,.2f}`)\n"
+        f"• *Started*: `{candle['start_time']} UTC`"
     )
-
