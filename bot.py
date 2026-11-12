@@ -21,6 +21,7 @@ from config import logger
 from hourly_volume import SETTING_LABEL, check_hourly_volume
 from manual_charts import request_chart
 from screenshots import send_alert_chart
+import volume_level
 
 
 def authorized_only(func: Callable) -> Callable:
@@ -78,6 +79,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/chart1h` — 20-bar 1H chart with tick volume\n"
         "• `/screenshot` — Live TradingView snapshot\n"
         "• `/volume1h` — Toggle 1H volume spike alarm\n"
+        "• `/vol_level <HH[:MM]>` — Set 1H volume level alert (95% target)\n"
+        "• `/vol_level_clear` — Clear 1H volume level alert\n"
         "• `/status` — Bot status & active settings"
     )
     if update.message:
@@ -190,11 +193,18 @@ def build_alerts_list_view():
     alerts = alert_manager.get_active_price_alerts()
     two_green_status = "🟢 ON (One-Shot)" if alert_manager.is_setting_enabled("two_green_candles") else "⚪ OFF"
     two_red_status = "🔴 ON (One-Shot)" if alert_manager.is_setting_enabled("two_red_candles") else "⚪ OFF"
+    vol_lvl = alert_manager.get_volume_level()
+    vol_lvl_status = (
+        f"ON ({vol_lvl['target_hour_ist']} IST, {vol_lvl['target_volume']:,.0f} ticks)"
+        if vol_lvl.get("enabled")
+        else "OFF"
+    )
 
     header = (
         f"⚙️ *Alert Settings [{config.state.current_timeframe}]:*\n"
         f"• 2-Green: `{two_green_status}` · 2-Red: `{two_red_status}`\n"
-        f"• 1H Vol Spike: `{'ON (One-Shot)' if alert_manager.is_hourly_volume_enabled() else 'OFF'}`\n\n"
+        f"• 1H Vol Spike: `{'ON (One-Shot)' if alert_manager.is_hourly_volume_enabled() else 'OFF'}`\n"
+        f"• 1H Vol Level: `{vol_lvl_status}`\n\n"
     )
 
     if not alerts:
@@ -253,6 +263,12 @@ def build_status_text() -> str:
     two_green = "🟢 ON" if alert_manager.is_setting_enabled("two_green_candles") else "⚪ OFF"
     two_red = "🔴 ON" if alert_manager.is_setting_enabled("two_red_candles") else "⚪ OFF"
     vol_status = "🔊 ON" if alert_manager.is_hourly_volume_enabled() else "⚪ OFF"
+    vol_lvl = alert_manager.get_volume_level()
+    vol_lvl_status = (
+        f"🔊 ON ({vol_lvl['target_hour_ist']} IST \u2014 {vol_lvl['threshold_volume']:,.0f} ticks)"
+        if vol_lvl.get("enabled")
+        else "⚪ OFF"
+    )
     active_alerts_cnt = len(alert_manager.get_active_price_alerts())
     offset_str = f" ({config.OANDA_PRICE_OFFSET:+.2f})" if config.OANDA_PRICE_OFFSET != 0.0 else ""
 
@@ -264,7 +280,8 @@ def build_status_text() -> str:
         f"🎯 *Active Triggers:*\n"
         f"• Price Targets: `{active_alerts_cnt} active`\n"
         f"• 2-Green: `{two_green}` · 2-Red: `{two_red}`\n"
-        f"• 1H Volume ≥120% MA20: `{vol_status}`"
+        f"• 1H Volume ≥120% MA20: `{vol_status}`\n"
+        f"• 1H Volume Level (95%): `{vol_lvl_status}`"
     )
 
 @authorized_only
@@ -292,6 +309,87 @@ async def hourly_volume_command(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text(
             toggle_hourly_volume_text(), reply_markup=get_keyboard(), parse_mode="Markdown"
         )
+
+
+@authorized_only
+async def vol_level_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+
+    args = context.args or []
+    if not args:
+        await update.message.reply_text(
+            "⚠️ Please provide an hour in IST (24h format).\n"
+            "Example: `/vol_level 14:00` or `/vol_level 14:30` or `/vol_level 14`",
+            reply_markup=get_keyboard(),
+            parse_mode="Markdown",
+        )
+        return
+
+    time_arg = args[0].strip()
+    try:
+        hour, minute = volume_level.parse_ist_time(time_arg)
+    except ValueError as e:
+        await update.message.reply_text(
+            f"❌ {e}\nPlease use 24-hour IST format (e.g., `/vol_level 14:00`).",
+            reply_markup=get_keyboard(),
+            parse_mode="Markdown",
+        )
+        return
+
+    # Fetch 1H candles from TradingView OANDA feed
+    closed_candles, _ = await volume_level.fetch_tradingview("1h", max_closed=48)
+    if not closed_candles:
+        await update.message.reply_text(
+            "❌ Could not retrieve OANDA 1H candle history right now. Please try again shortly.",
+            reply_markup=get_keyboard(),
+            parse_mode="Markdown",
+        )
+        return
+
+    try:
+        target_candle = volume_level.find_target_ist_candle(closed_candles, hour, minute)
+    except ValueError as e:
+        await update.message.reply_text(
+            f"❌ {e}",
+            reply_markup=get_keyboard(),
+            parse_mode="Markdown",
+        )
+        return
+
+    target_vol = float(target_candle["volume"])
+    threshold_vol = round(target_vol * volume_level.THRESHOLD_RATIO, 2)
+    candle_time_str = volume_level.format_candle_ist_range(target_candle)
+    start_utc = int(target_candle["start_timestamp"])
+
+    alert_manager.set_volume_level(
+        target_hour_ist=f"{hour:02d}:{minute:02d}",
+        target_volume=target_vol,
+        threshold_volume=threshold_vol,
+        candle_start_utc=start_utc,
+        candle_time_str=candle_time_str,
+    )
+
+    msg = (
+        "🎯 *Volume Level Alert Armed!*\n\n"
+        f"• *Reference Candle*: `{candle_time_str}`\n"
+        f"• *Reference Volume*: `{target_vol:,.0f}` ticks\n"
+        f"• *Trigger Threshold*: `{threshold_vol:,.0f}` ticks (95.0%)\n\n"
+        "ℹ️ _Will monitor live forming 1H candles every minute and notify you as soon as current forming volume hits 95% of this level._"
+    )
+    await update.message.reply_text(msg, reply_markup=get_keyboard(), parse_mode="Markdown")
+
+
+@authorized_only
+async def vol_level_clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+    alert_manager.clear_volume_level()
+    await update.message.reply_text(
+        "🗑 *Volume Level Alert Cleared.*",
+        reply_markup=get_keyboard(),
+        parse_mode="Markdown",
+    )
 
 
 @authorized_only
@@ -524,6 +622,18 @@ async def hourly_volume_scheduler(app: Application, *, started_at: float):
             logger.warning("Hourly volume alarm check failed (%s)", type(exc).__name__)
 
 
+async def volume_level_scheduler(app: Application, *, started_at: float):
+    """Background loop polling live forming 1H candle volume every 60 seconds."""
+    while True:
+        try:
+            await asyncio.sleep(60)
+            await volume_level.check_volume_level(app.bot, alert_manager, started_at=started_at)
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:  # noqa: BLE001 - isolate this optional scheduler; redact credentials
+            logger.warning("Volume level check failed (%s)", type(exc).__name__)
+
+
 async def post_init(app: Application):
     started_at = time.time()
     tf = config.state.current_timeframe
@@ -533,6 +643,7 @@ async def post_init(app: Application):
         config.state.last_alerted_candle_time = f"{tf}_{latest['timestamp']}"
     asyncio.create_task(candle_scheduler(app))
     asyncio.create_task(hourly_volume_scheduler(app, started_at=started_at))
+    asyncio.create_task(volume_level_scheduler(app, started_at=started_at))
     try:
         await app.bot.send_message(
             chat_id=config.ALLOWED_USER_ID,
@@ -578,6 +689,8 @@ def main():
     app.add_handler(CommandHandler("screenshot", screenshot_command))
     app.add_handler(CommandHandler("chart1h", hourly_chart_command))
     app.add_handler(CommandHandler("volume1h", hourly_volume_command))
+    app.add_handler(CommandHandler("vol_level", vol_level_command))
+    app.add_handler(CommandHandler("vol_level_clear", vol_level_clear_command))
     app.add_handler(CallbackQueryHandler(button_callback))
 
     app.run_polling(drop_pending_updates=True)
