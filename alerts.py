@@ -13,6 +13,16 @@ ALERTS_FILE = DATA_DIR / "alerts.json"
 
 DEFAULT_DATA = {
     "hourly_volume": {"enabled": False, "armed_after": 0, "last_processed": 0},
+    "volume_level": {
+        "enabled": False,
+        "target_hour_ist": "",
+        "target_volume": 0.0,
+        "threshold_volume": 0.0,
+        "candle_start_utc": 0,
+        "candle_time_str": "",
+        "armed_after": 0.0,
+        "last_processed_candle": "",
+    },
     "settings": {
         "two_green_candles": False,
         "two_red_candles": False,
@@ -49,6 +59,18 @@ class AlertManager:
                     )
                 ):
                     data["hourly_volume"] = DEFAULT_DATA["hourly_volume"].copy()
+                vol_lvl = data.get("volume_level")
+                if (
+                    not isinstance(vol_lvl, dict)
+                    or type(vol_lvl.get("enabled")) is not bool
+                    or any(
+                        type(vol_lvl.get(key)) not in (int, float)
+                        or not math.isfinite(vol_lvl[key])
+                        or vol_lvl[key] < 0
+                        for key in ("target_volume", "threshold_volume", "candle_start_utc", "armed_after")
+                    )
+                ):
+                    data["volume_level"] = DEFAULT_DATA["volume_level"].copy()
                 if "settings" not in data:
                     data["settings"] = DEFAULT_DATA["settings"].copy()
                 else:
@@ -105,6 +127,59 @@ class AlertManager:
         if not self._write(data):
             raise OSError("Hourly volume alarm result could not be saved")
         return qualifies
+
+    def set_volume_level(
+        self,
+        *,
+        target_hour_ist: str,
+        target_volume: float,
+        threshold_volume: float,
+        candle_start_utc: int,
+        candle_time_str: str,
+    ) -> Dict[str, Any]:
+        data = self._read()
+        state = {
+            "enabled": True,
+            "target_hour_ist": target_hour_ist,
+            "target_volume": float(target_volume),
+            "threshold_volume": float(threshold_volume),
+            "candle_start_utc": int(candle_start_utc),
+            "candle_time_str": candle_time_str,
+            "armed_after": time.time(),
+            "last_processed_candle": "",
+        }
+        data["volume_level"] = state
+        if not self._write(data):
+            raise OSError("Volume level alert could not be saved")
+        logger.info(f"Armed volume level alert: {target_volume:,.0f} ticks (95%={threshold_volume:,.0f}) for {target_hour_ist}")
+        return state
+
+    def clear_volume_level(self) -> bool:
+        data = self._read()
+        data["volume_level"] = DEFAULT_DATA["volume_level"].copy()
+        if not self._write(data):
+            raise OSError("Volume level alert could not be cleared")
+        logger.info("Cleared volume level alert")
+        return True
+
+    def get_volume_level(self) -> Dict[str, Any]:
+        return self._read().get("volume_level", DEFAULT_DATA["volume_level"].copy())
+
+    def consume_volume_level(self, candle_id: str, *, not_before: float) -> bool:
+        """Atomic qualification consumption: disables alert on trigger, prevents replay."""
+        data = self._read()
+        lvl = data.get("volume_level", {})
+        if (
+            lvl.get("enabled") is not True
+            or lvl.get("armed_after", 0.0) < not_before
+            or lvl.get("last_processed_candle") == candle_id
+        ):
+            return False
+        lvl["last_processed_candle"] = candle_id
+        lvl["enabled"] = False
+        if not self._write(data):
+            raise OSError("Volume level alert trigger could not be saved")
+        return True
 
     def is_setting_enabled(self, setting_name: str) -> bool:
         data = self._read()

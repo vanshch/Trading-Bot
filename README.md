@@ -19,7 +19,8 @@ settings are documented separately below.
 - `manual_charts.py`: background manual-chart requests with shared busy protection.
 - `hourly_chart.py`: Pillow renderer for 20 verified OANDA hourly candles/tick volume.
 - `hourly_volume.py`: opt-in one-shot closed-H1 OANDA tick-volume alarm.
-- `tests/`: six active offline suites; `.github/workflows/xauusd-checks.yml` runs CI.
+- `volume_level.py`: opt-in one-shot live forming 1H candle volume level alert (95% of target IST hour volume).
+- `tests/`: seven active offline suites; `.github/workflows/xauusd-checks.yml` runs CI.
 - `tools/preview_hourly_chart.py` and `test_chart_delivery.py`: explicit live capture
   tools. `tools/tradingview_soak/` preserves the Linux offline harness and procedure.
 - `docs/` and `artifacts/reviews/`: historical handoffs, deployment and review evidence.
@@ -99,6 +100,11 @@ rejected. `/start` opens the inline control panel.
   **at least 1.20 × the mean of the preceding 20 completed H1 candles**.
   The evaluated candle is excluded; small grazes are ignored. See
   [progress](progress.md) for testing/deployment status.
+- `/vol_level <HH[:MM]>`: arm an IST volume level alert based on a previous completed 1H candle.
+  Extracts the tick volume of the most recent completed candle matching that IST hour and sets
+  a trigger threshold at **95% of that volume**. A background scheduler checks the live forming
+  1H candle every minute and alerts immediately once forming volume reaches ≥95%, then auto-disarms (one-shot).
+- `/vol_level_clear`: clear/disarm any active volume level alert.
 
 A wick rejection requires the wick to touch/pierce a level while the candle body
 stays on the unbroken side. A body breakout waits for the immediate next candle:
