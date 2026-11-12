@@ -79,6 +79,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/chart1h` — 20-bar 1H chart with tick volume\n"
         "• `/screenshot` — Live TradingView snapshot\n"
         "• `/volume1h` — Toggle 1H volume spike alarm\n"
+        "• `/vol_level <HH[:MM]>` — Set 1H volume level alert (95% target)\n"
+        "• `/vol_level_clear` — Clear 1H volume level alert\n"
         "• `/status` — Bot status & active settings"
     )
     if update.message:

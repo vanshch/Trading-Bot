@@ -112,14 +112,19 @@ an opposite-color close back across the level confirms a false breakout;
 otherwise the level is invalidated silently. See `alerts.py` and its tests for
 boundary conditions.
 
-Alert evaluation uses completed candles, excludes forming bars, seeds its startup
-processed timestamp from history and rejects equal/older closes across replay or
-fallback. Settings are atomically replaced in `data/alerts.json` and recover to
-safe defaults if missing/corrupt. Supported configured timeframes are 5m, 15m, 1h
+Price-level and momentum alert evaluation uses completed candles, excludes forming
+bars, seeds its startup processed timestamp from history and rejects equal/older closes
+across replay or fallback. Settings are atomically replaced in `data/alerts.json` and
+recover to safe defaults if missing/corrupt. Supported configured timeframes are 5m, 15m, 1h
 and 4h; default/recorded production monitoring is 15m. The active menu has no
 interactive timeframe selector. H1 charts do not enable a second alert scheduler.
 
-The volume alarm has its own hourly check (UTC hour boundary plus 10 seconds),
+The hourly volume alarm (`/volume1h`) evaluates completed 21-bar H1 history at the
+hourly boundary and also excludes forming bars. In contrast, the IST volume level alert
+(`/vol_level`) explicitly monitors the in-progress forming 1H candle every minute and
+alerts intrabar as soon as live forming volume reaches ≥95% of the target level.
+
+The hourly volume alarm (`/volume1h`) has its own check (UTC hour boundary plus 10 seconds),
 without changing price/momentum monitoring. It fetches only while armed and
 requires optional tvkit/Python 3.11+, independently of `TRADINGVIEW_FEED_ENABLED`,
 as an explicit user request. Only verified OANDA tick volume is accepted; no
@@ -127,8 +132,8 @@ Twelve Data/Yahoo volume is substituted. It needs 21 closed bars, skips forming
 bars and closes before arming/restart, and persists its one-shot state atomically.
 The baseline is 20 **trading bars**, allowing session/weekend gaps, and differs
 from an SMA that includes the evaluated bar. Unavailable data leaves the alarm
-armed for the next hourly check. No intrabar alert, catch-up/backfill, photo or
-durable send retry is implemented. Like momentum alerts, its one-shot state is
+armed for the next hourly check. For closed-candle alerts, no intrabar alert, catch-up/backfill,
+photo or durable send retry is implemented. Like momentum alerts, its one-shot state is
 consumed before sending. See the [isolated test procedure and validation limits](docs/hourly-volume-validation-20261020.md).
 
 ## Data and chart contracts

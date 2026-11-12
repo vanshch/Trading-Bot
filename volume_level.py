@@ -75,8 +75,9 @@ def find_target_ist_candle(
             continue
         dt_ist = datetime.fromtimestamp(start_ts, IST_TZ)
         start_minutes = dt_ist.hour * 60 + dt_ist.minute
-        end_minutes = start_minutes + 60
-        if start_minutes <= target_total_minutes < end_minutes:
+        # Handle 60m interval spanning across midnight (e.g. 23:30 to 00:30 IST)
+        rel_target = (target_total_minutes - start_minutes) % 1440
+        if 0 <= rel_target < 60:
             return candle
 
     # Third pass: candle starting in that hour (dt_ist.hour == target_hour)
@@ -95,13 +96,13 @@ def find_target_ist_candle(
 
 
 def format_candle_ist_range(candle: Dict[str, Any]) -> str:
-    """Format candle start-to-end range in IST and UTC for user messaging."""
+    """Format candle start-to-end range in IST (with date) and UTC for user messaging."""
     start_ts = float(candle["start_timestamp"])
     dt_ist = datetime.fromtimestamp(start_ts, IST_TZ)
     end_ist = dt_ist + timedelta(hours=1)
     dt_utc = datetime.fromtimestamp(start_ts, timezone.utc)
     return (
-        f"{dt_ist.strftime('%H:%M')} – {end_ist.strftime('%H:%M')} IST "
+        f"{dt_ist.strftime('%d %b %H:%M')} – {end_ist.strftime('%H:%M')} IST "
         f"({dt_utc.strftime('%H:%M UTC')})"
     )
 
@@ -114,6 +115,7 @@ async def check_volume_level(bot, manager, *, started_at: float):
 
     target_vol = state.get("target_volume", 0.0)
     threshold_vol = state.get("threshold_volume", 0.0)
+    armed_after = state.get("armed_after")
     if target_vol <= 0 or threshold_vol <= 0:
         return
 
@@ -134,10 +136,6 @@ async def check_volume_level(bot, manager, *, started_at: float):
 
     # Check qualification
     if vol >= threshold_vol:
-        consumed = manager.consume_volume_level(candle_id, not_before=started_at)
-        if not consumed:
-            return
-
         dt_ist = datetime.fromtimestamp(start_ts, IST_TZ)
         end_ist = dt_ist + timedelta(hours=1)
         candle_time_str = f"{dt_ist.strftime('%H:%M')} – {end_ist.strftime('%H:%M')} IST"
@@ -145,10 +143,10 @@ async def check_volume_level(bot, manager, *, started_at: float):
 
         text = (
             "🔊 *XAU/USD [1H] Volume Level Alert!*\n"
-            f"• *Live Forming Bar*: {candle_time_str}\n"
-            f"• *Current Tick Volume*: {vol:,.0f}\n"
-            f"• *Target Level Volume*: {target_vol:,.0f} ({state.get('target_hour_ist', 'N/A')})\n"
-            f"• *Progress*: {percent_of_target:.1f}% of target (threshold: 95.0% = {threshold_vol:,.0f})\n\n"
+            f"• *Live Forming Bar*: `{candle_time_str}`\n"
+            f"• *Current Tick Volume*: `{vol:,.0f}`\n"
+            f"• *Target Level Volume*: `{target_vol:,.0f}` ({state.get('target_hour_ist', 'N/A')})\n"
+            f"• *Progress*: `{percent_of_target:.1f}%` of target (threshold: 95.0% = `{threshold_vol:,.0f}`)\n\n"
             "ℹ️ _Alert triggered & disarmed (one-shot)._"
         )
         try:
@@ -159,6 +157,13 @@ async def check_volume_level(bot, manager, *, started_at: float):
             )
             config.logger.info(
                 f"Dispatched Volume Level Alert: {vol:,.0f} >= {threshold_vol:,.0f} (95% of {target_vol:,.0f})"
+            )
+            # Only disarm once notification is successfully dispatched
+            manager.consume_volume_level(
+                candle_id,
+                expected_armed_after=armed_after,
+                candle_start_utc=start_ts,
+                not_before=started_at,
             )
         except Exception as exc:
             config.logger.warning("Failed to dispatch volume level alert (%s)", type(exc).__name__)

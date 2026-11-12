@@ -1,5 +1,6 @@
 import asyncio
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -67,6 +68,14 @@ class VolumeLevelUnitTests(unittest.TestCase):
         matched_c3_only = volume_level.find_target_ist_candle([c1, c3], 14, 0)
         self.assertEqual(matched_c3_only["start_timestamp"], c3["start_timestamp"])
 
+    def test_find_target_ist_candle_midnight_crossing(self):
+        # 18:00 UTC = 23:30 IST (spans 23:30 to 00:30 IST across midnight)
+        utc_ts = 1794506400  # 18:00 UTC
+        c_midnight = make_candle(utc_ts, 4200.0)
+        matched = volume_level.find_target_ist_candle([c_midnight], 0, 0)
+        self.assertEqual(matched["start_timestamp"], c_midnight["start_timestamp"])
+        self.assertEqual(matched["volume"], 4200.0)
+
     def test_alert_manager_set_and_clear_volume_level(self):
         self.assertFalse(self.manager.get_volume_level()["enabled"])
 
@@ -126,14 +135,16 @@ class VolumeLevelAsyncTests(unittest.IsolatedAsyncioTestCase):
             candle_start_utc=1700000000,
             candle_time_str="14:30 – 15:30 IST",
         )
-        started_at = self.manager.get_volume_level()["armed_after"]
+        # Poller started 5 minutes into the candle
+        candle_start = int(time.time()) - 300
+        started_at = candle_start + 100
 
         mock_bot = AsyncMock()
 
         # Forming candle at 949 (below 95%) -> no alert
         forming_below = {
             "source": SOURCE,
-            "start_timestamp": 1700003600,
+            "start_timestamp": candle_start,
             "volume": 949.0,
         }
         with patch("volume_level.fetch_tradingview", AsyncMock(return_value=([], forming_below))):
@@ -144,7 +155,7 @@ class VolumeLevelAsyncTests(unittest.IsolatedAsyncioTestCase):
         # Forming candle at 950 (exactly 95%) -> triggers alert once and disarms
         forming_hit = {
             "source": SOURCE,
-            "start_timestamp": 1700003600,
+            "start_timestamp": candle_start,
             "volume": 950.0,
         }
         with patch("volume_level.fetch_tradingview", AsyncMock(return_value=([], forming_hit))):

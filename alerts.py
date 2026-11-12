@@ -63,6 +63,9 @@ class AlertManager:
                 if (
                     not isinstance(vol_lvl, dict)
                     or type(vol_lvl.get("enabled")) is not bool
+                    or not isinstance(vol_lvl.get("target_hour_ist"), str)
+                    or not isinstance(vol_lvl.get("candle_time_str"), str)
+                    or not isinstance(vol_lvl.get("last_processed_candle"), str)
                     or any(
                         type(vol_lvl.get(key)) not in (int, float)
                         or not math.isfinite(vol_lvl[key])
@@ -165,15 +168,24 @@ class AlertManager:
     def get_volume_level(self) -> Dict[str, Any]:
         return self._read().get("volume_level", DEFAULT_DATA["volume_level"].copy())
 
-    def consume_volume_level(self, candle_id: str, *, not_before: float) -> bool:
+    def consume_volume_level(
+        self,
+        candle_id: str,
+        *,
+        expected_armed_after: Optional[float] = None,
+        candle_start_utc: Optional[int] = None,
+        not_before: Optional[float] = None,
+    ) -> bool:
         """Atomic qualification consumption: disables alert on trigger, prevents replay."""
         data = self._read()
         lvl = data.get("volume_level", {})
-        if (
-            lvl.get("enabled") is not True
-            or lvl.get("armed_after", 0.0) < not_before
-            or lvl.get("last_processed_candle") == candle_id
-        ):
+        if lvl.get("enabled") is not True:
+            return False
+        if expected_armed_after is not None and lvl.get("armed_after") != expected_armed_after:
+            return False
+        if candle_start_utc is not None and not_before is not None and (candle_start_utc + 3600) <= not_before:
+            return False
+        if lvl.get("last_processed_candle") == candle_id:
             return False
         lvl["last_processed_candle"] = candle_id
         lvl["enabled"] = False
